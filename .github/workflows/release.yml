@@ -170,13 +170,18 @@ jobs:
           else
             archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
           fi
+          echo "TARGET=${TARGET} GOOS=${GOOS} GOARCH=${GOARCH} EXT=${ext} ARCHIVE=${archive_name}"
           rm -rf "$archive_dir"
           mkdir -p "$archive_dir"
 
           cd plugins/nous-portal
+          echo "Building plugin..."
           CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../$archive_dir/nous-portal${ext}" .
+          echo "Build complete"
+          ls -la "../$archive_dir"
 
           cd ..
+          echo "Archiving..."
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             if [[ "$GOOS" == "windows" ]]; then
               powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
@@ -186,6 +191,8 @@ jobs:
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" "nous-portal${ext}"
           fi
+          echo "Archive complete"
+          ls -la dist/
       - name: List dist contents
         shell: bash
         run: ls -la dist/ || true
