@@ -104,6 +104,7 @@ jobs:
             goarch: arm
             asset_arch: arm
             cross: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
     steps:
       - uses: actions/checkout@v6
         with:
@@ -134,7 +135,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           ASSET_ARCH: ${{ matrix.asset_arch }}
-          CC: ${{ matrix.cross }}
+          CC: ${{ matrix.cc }}
         run: |
           set -euo pipefail
           archive_dir="dist/${TARGET}"
@@ -145,7 +146,7 @@ jobs:
           cd "$PLUGIN_DIR"
           CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../../$archive_dir/${PLUGIN}.so" .
 
-          cd ..
+          cd ../..
           tar -C "$archive_dir" -czf "dist/$archive_name" "${PLUGIN}.so"
       - uses: actions/upload-artifact@v4
         with:
