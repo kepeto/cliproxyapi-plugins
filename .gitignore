@@ -1,9 +1,38 @@
-/build/
-/dist/
+# Build artifacts
 *.so
+*.so.*
+*.h
+*.a
+*.o
+*.obj
 *.dylib
 *.dll
-*.h
-.env
-*.log
+*.exe
+*.out
+
+# Compiled verification binary
+verify
+cmd/verify/
+
+# Local state / banks
+banks/
+*.db
+*.db-shm
+*.db-wal
+
+# Go build cache
+vendor/
+.vscode/
+.idea/
+
+# OS artifacts
 .DS_Store
+Thumbs.db
+
+# Test / temp
+tmp/
+temp/
+*.test
+*.prof
+*.cov
+coverage.*
