@@ -158,7 +158,8 @@ jobs:
           CC: ${{ matrix.cc }}
         run: |
           set -euo pipefail
-          archive_dir="dist/${TARGET}"
+          workspace="$GITHUB_WORKSPACE"
+          archive_dir="$workspace/dist/${TARGET}"
           ext=".so"
           if [[ "$GOOS" == "windows" ]]; then
             ext=".dll"
@@ -170,18 +171,18 @@ jobs:
           else
             archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
           fi
-          echo "TARGET=${TARGET} GOOS=${GOOS} GOARCH=${GOARCH} EXT=${ext} ARCHIVE=${archive_name}"
+          echo "WORKSPACE=${workspace} TARGET=${TARGET} GOOS=${GOOS} GOARCH=${GOARCH} EXT=${ext} ARCHIVE=${archive_name}"
           rm -rf "$archive_dir"
           mkdir -p "$archive_dir"
 
-          cd plugins/nous-portal
           echo "Building plugin..."
-          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../$archive_dir/nous-portal${ext}" .
+          cd "$workspace/plugins/nous-portal"
+          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "$archive_dir/nous-portal${ext}" .
           echo "Build complete"
-          ls -la "../$archive_dir"
+          ls -la "$archive_dir"
 
-          cd ../..
           echo "Archiving..."
+          cd "$workspace"
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             if [[ "$GOOS" == "windows" ]]; then
               powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
