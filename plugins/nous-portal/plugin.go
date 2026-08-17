@@ -175,7 +175,7 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 
 func registerPayload() string {
 	return `{
-  "schema_version": 2,
+  "schema_version": 3,
   "metadata": {
     "Name": "Nous Portal",
     "Version": "0.1.0",
