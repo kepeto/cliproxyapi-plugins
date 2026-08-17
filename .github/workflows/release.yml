@@ -32,9 +32,9 @@ jobs:
           <!-- plugin-release-assets:start -->
           ## Release Assets
 
-          - `nous-portal_<version>_linux_<arch>.so.tar.gz` — dynamic library plugin for Linux/glibc systems.
-          - `nous-portal_<version>_darwin_<arch>.so.tar.gz` — dynamic library plugin for macOS.
-          - `nous-portal_<version>_windows_<arch>.zip` — dynamic library plugin for Windows.
+          - `nous-portal_<version>_linux_<arch>.so.tar.gz` — `.so` plugin for Linux.
+          - `nous-portal_<version>_darwin_<arch>.so.tar.gz` — `.dylib` plugin for macOS.
+          - `nous-portal_<version>_windows_<arch>.zip` — `.dll` plugin for Windows.
           <!-- plugin-release-assets:end -->
           EOF
 
@@ -159,6 +159,12 @@ jobs:
         run: |
           set -euo pipefail
           archive_dir="dist/${TARGET}"
+          ext=".so"
+          if [[ "$GOOS" == "windows" ]]; then
+            ext=".dll"
+          elif [[ "$GOOS" == "darwin" ]]; then
+            ext=".dylib"
+          fi
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
           else
@@ -168,17 +174,17 @@ jobs:
           mkdir -p "$archive_dir"
 
           cd plugins/nous-portal
-          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../$archive_dir/nous-portal.so" .
+          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../$archive_dir/nous-portal${ext}" .
 
           cd ..
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             if [[ "$GOOS" == "windows" ]]; then
               powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
             else
-              zip -j "dist/$archive_name" "$archive_dir/nous-portal.so"
+              zip -j "dist/$archive_name" "$archive_dir/nous-portal${ext}"
             fi
           else
-            tar -C "$archive_dir" -czf "dist/$archive_name" nous-portal.so
+            tar -C "$archive_dir" -czf "dist/$archive_name" "nous-portal${ext}"
           fi
       - name: List dist contents
         shell: bash
