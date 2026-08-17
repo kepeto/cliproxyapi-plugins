@@ -180,6 +180,9 @@ jobs:
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" nous-portal.so
           fi
+      - name: List dist contents
+        shell: bash
+        run: ls -la dist/ || true
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
