@@ -9,11 +9,6 @@ on:
 permissions:
   contents: write
 
-env:
-  GO_VERSION: '1.26'
-  PLUGIN: nous-portal
-  PLUGIN_DIR: plugins/${{ env.PLUGIN }}
-
 jobs:
   prepare-release:
     runs-on: ubuntu-latest
@@ -85,6 +80,10 @@ jobs:
     name: build ${{ matrix.target }}
     needs: prepare-release
     runs-on: ${{ matrix.runner }}
+    env:
+      GO_VERSION: '1.26'
+      PLUGIN: nous-portal
+      PLUGIN_DIR: plugins/${{ env.PLUGIN }}
     strategy:
       fail-fast: false
       matrix:
@@ -104,7 +103,7 @@ jobs:
             goos: linux
             goarch: arm
             asset_arch: arm
-            cross: arm-linux-gnueabihf-gcc
+            cross: gcc-arm-linux-gnueabihf
     steps:
       - uses: actions/checkout@v6
         with:
