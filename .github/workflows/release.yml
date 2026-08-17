@@ -1,0 +1,196 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: '1.26'
+  PLUGIN: nous-portal
+  PLUGIN_DIR: plugins/${{ env.PLUGIN }}
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_notes_file="$(mktemp)"
+          generated_notes_file="$(mktemp)"
+          changelog_entries_file="$(mktemp)"
+          updated_notes_file="$(mktemp)"
+          trap 'rm -f "$release_notes_file" "$generated_notes_file" "$changelog_entries_file" "$updated_notes_file"' EXIT
+
+          cat > "$release_notes_file" <<'EOF'
+          <!-- plugin-release-assets:start -->
+          ## Release Assets
+
+          - `nous-portal_<version>_linux_<arch>.so.tar.gz` — dynamic library plugin for Linux/glibc systems.
+          <!-- plugin-release-assets:end -->
+          EOF
+
+          git fetch --force --tags
+          previous_tag=""
+          if previous_tag_value="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null)"; then
+            previous_tag="$previous_tag_value"
+            changelog_range="${previous_tag}..${GITHUB_REF_NAME}"
+          else
+            changelog_range="$GITHUB_REF_NAME"
+          fi
+
+          git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" |
+            grep -Ev '^- (docs:|test:)' > "$changelog_entries_file" || true
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            --jq .body > "$generated_notes_file" || true
+          if [[ ! -s "$generated_notes_file" ]]; then
+            if [[ -n "$previous_tag" ]]; then
+              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$previous_tag" "$GITHUB_REF_NAME" > "$generated_notes_file"
+            else
+              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > "$generated_notes_file"
+            fi
+          fi
+
+          {
+            cat "$release_notes_file"
+            printf '\n'
+            if [[ -s "$changelog_entries_file" ]]; then
+              printf '## Changelog\n\n'
+              cat "$changelog_entries_file"
+              printf '\n\n'
+            fi
+            cat "$generated_notes_file"
+          } > "$updated_notes_file"
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file"
+          fi
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: prepare-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset_arch: amd64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            asset_arch: aarch64
+          - target: linux-arm
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm
+            asset_arch: arm
+            cross: arm-linux-gnueabihf-gcc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: ${{ env.PLUGIN_DIR }}/go.sum
+      - name: Install cross-compiler
+        shell: bash
+        run: |
+          if [[ "${{ matrix.cross }}" != "" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y ${{ matrix.cross }}
+          fi
+      - name: Generate Build Metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - name: Build plugin
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          ASSET_ARCH: ${{ matrix.asset_arch }}
+          CC: ${{ matrix.cross }}
+        run: |
+          set -euo pipefail
+          archive_dir="dist/${TARGET}"
+          archive_name="${PLUGIN}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
+          rm -rf "$archive_dir"
+          mkdir -p "$archive_dir"
+
+          cd "$PLUGIN_DIR"
+          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../../$archive_dir/${PLUGIN}.so" .
+
+          cd ..
+          tar -C "$archive_dir" -czf "dist/$archive_name" "${PLUGIN}.so"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*.tar.gz)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            printf 'expected archive assets, found %s\n' "${#assets[@]}" >&2
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+      - name: Refresh release checksums
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          gh release download "$GITHUB_REF_NAME" \
+            --pattern '*.tar.gz' \
+            --dir "$tmp_dir" \
+            --clobber
+          (
+            cd "$tmp_dir"
+            shopt -s nullglob
+            archives=(*.tar.gz)
+            if [[ ${#archives[@]} -eq 0 ]]; then
+              echo "No release archives found"
+              exit 0
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "${archives[@]}" | sort -k2 > checksums.txt
+            else
+              shasum -a 256 "${archives[@]}" | sort -k2 > checksums.txt
+            fi
+          )
+          gh release upload "$GITHUB_REF_NAME" "$tmp_dir/checksums.txt" --clobber
