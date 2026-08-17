@@ -33,6 +33,8 @@ jobs:
           ## Release Assets
 
           - `nous-portal_<version>_linux_<arch>.so.tar.gz` — dynamic library plugin for Linux/glibc systems.
+          - `nous-portal_<version>_darwin_<arch>.so.tar.gz` — dynamic library plugin for macOS.
+          - `nous-portal_<version>_windows_<arch>.zip` — dynamic library plugin for Windows.
           <!-- plugin-release-assets:end -->
           EOF
 
@@ -80,10 +82,6 @@ jobs:
     name: build ${{ matrix.target }}
     needs: prepare-release
     runs-on: ${{ matrix.runner }}
-    env:
-      GO_VERSION: '1.26'
-      PLUGIN: nous-portal
-      PLUGIN_DIR: plugins/nous-portal
     strategy:
       fail-fast: false
       matrix:
@@ -93,27 +91,54 @@ jobs:
             goos: linux
             goarch: amd64
             asset_arch: amd64
+            archive_format: tar.gz
           - target: linux-arm64
             runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
             asset_arch: aarch64
+            archive_format: tar.gz
           - target: linux-arm
             runner: ubuntu-latest
             goos: linux
             goarch: arm
             asset_arch: arm
+            archive_format: tar.gz
             cross: gcc-arm-linux-gnueabihf
             cc: arm-linux-gnueabihf-gcc
+          - target: darwin-amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - target: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - target: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: zip
+          - target: windows-arm64
+            runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: zip
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: '1.26'
           cache: true
-          cache-dependency-path: ${{ env.PLUGIN_DIR }}/go.sum
+          cache-dependency-path: plugins/nous-portal/go.sum
       - name: Install cross-compiler
         shell: bash
         run: |
@@ -135,23 +160,36 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           ASSET_ARCH: ${{ matrix.asset_arch }}
+          ARCHIVE_FORMAT: ${{ matrix.archive_format }}
           CC: ${{ matrix.cc }}
         run: |
           set -euo pipefail
           archive_dir="dist/${TARGET}"
-          archive_name="${PLUGIN}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
+          if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
+            archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
+          else
+            archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
+          fi
           rm -rf "$archive_dir"
           mkdir -p "$archive_dir"
 
-          cd "$PLUGIN_DIR"
-          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../../$archive_dir/${PLUGIN}.so" .
+          cd plugins/nous-portal
+          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "../$archive_dir/nous-portal.so" .
 
-          cd ../..
-          tar -C "$archive_dir" -czf "dist/$archive_name" "${PLUGIN}.so"
+          cd ..
+          if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
+            if [[ "$GOOS" == "windows" ]]; then
+              powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
+            else
+              zip -j "dist/$archive_name" "$archive_dir/nous-portal.so"
+            fi
+          else
+            tar -C "$archive_dir" -czf "dist/$archive_name" nous-portal.so
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: dist/*
           if-no-files-found: error
       - name: Upload release assets
         env:
@@ -160,7 +198,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(dist/*.tar.gz)
+          assets=(dist/*.tar.gz dist/*.zip)
           if [[ ${#assets[@]} -eq 0 ]]; then
             printf 'expected archive assets, found %s\n' "${#assets[@]}" >&2
             exit 1
@@ -177,12 +215,13 @@ jobs:
           trap 'rm -rf "$tmp_dir"' EXIT
           gh release download "$GITHUB_REF_NAME" \
             --pattern '*.tar.gz' \
+            --pattern '*.zip' \
             --dir "$tmp_dir" \
             --clobber
           (
             cd "$tmp_dir"
             shopt -s nullglob
-            archives=(*.tar.gz)
+            archives=(*.tar.gz *.zip)
             if [[ ${#archives[@]} -eq 0 ]]; then
               echo "No release archives found"
               exit 0
