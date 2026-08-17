@@ -35,7 +35,6 @@ jobs:
           - `nous-portal_<version>_linux_<arch>.so.tar.gz` — dynamic library plugin for Linux/glibc systems.
           - `nous-portal_<version>_darwin_<arch>.so.tar.gz` — dynamic library plugin for macOS.
           - `nous-portal_<version>_windows_<arch>.zip` — dynamic library plugin for Windows.
-          - `nous-portal_<version>_freebsd_<arch>.so.tar.gz` — dynamic library plugin for FreeBSD.
           <!-- plugin-release-assets:end -->
           EOF
 
@@ -131,18 +130,6 @@ jobs:
             goarch: arm64
             asset_arch: aarch64
             archive_format: zip
-          - target: freebsd-amd64
-            runner: ubuntu-latest
-            goos: freebsd
-            goarch: amd64
-            asset_arch: amd64
-            archive_format: tar.gz
-          - target: freebsd-arm64
-            runner: ubuntu-latest
-            goos: freebsd
-            goarch: arm64
-            asset_arch: aarch64
-            archive_format: tar.gz
     steps:
       - uses: actions/checkout@v6
         with:
@@ -202,7 +189,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/*
+          path: dist/
           if-no-files-found: error
       - name: Upload release assets
         env:

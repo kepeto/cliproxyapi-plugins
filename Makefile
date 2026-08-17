@@ -17,8 +17,6 @@ help:
 	@echo "  make arch-linux-amd64"
 	@echo "  make arch-linux-arm64"
 	@echo "  make arch-linux-arm"
-	@echo "  make arch-freebsd-amd64"
-	@echo "  make arch-freebsd-arm64"
 	@echo "  make clean"
 
 build:
@@ -44,10 +42,4 @@ arch-linux-arm64: $(DIST)
 arch-linux-arm: $(DIST)
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build -buildmode=c-shared -o $(DIST)/$(PLUGIN)-linux-arm.so ./$(PLUGIN_DIR)
 
-arch-freebsd-amd64: $(DIST)
-	CGO_ENABLED=1 GOOS=freebsd GOARCH=amd64 go build -buildmode=c-shared -o $(DIST)/$(PLUGIN)-freebsd-amd64.so ./$(PLUGIN_DIR)
-
-arch-freebsd-arm64: $(DIST)
-	CGO_ENABLED=1 GOOS=freebsd GOARCH=arm64 go build -buildmode=c-shared -o $(DIST)/$(PLUGIN)-freebsd-arm64.so ./$(PLUGIN_DIR)
-
-dist: arch-linux-amd64 arch-linux-arm64 arch-linux-arm arch-freebsd-amd64 arch-freebsd-arm64
+dist: arch-linux-amd64 arch-linux-arm64 arch-linux-arm
