@@ -180,7 +180,7 @@ jobs:
           echo "Build complete"
           ls -la "../$archive_dir"
 
-          cd ..
+          cd ../..
           echo "Archiving..."
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             if [[ "$GOOS" == "windows" ]]; then
