@@ -1,0 +1,9 @@
+/build/
+/dist/
+*.so
+*.dylib
+*.dll
+*.h
+.env
+*.log
+.DS_Store
