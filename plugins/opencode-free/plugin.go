@@ -1,0 +1,175 @@
+package main
+
+/*
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef struct {
+	uint32_t abi_version;
+	void *reserved;
+} cliproxy_plugin_api;
+
+typedef struct {
+	void *call_ctx;
+	int (*call)(void *call_ctx, const char *method, const uint8_t *payload, size_t payload_len, uint8_t **out, size_t *out_len);
+	void (*free)(void *call_ctx, void *ptr, size_t len);
+	void (*log)(void *call_ctx, const char *level, const char *message);
+} cliproxy_host_api;
+
+typedef struct {
+	uint8_t *ptr;
+	size_t len;
+} cliproxy_buffer;
+
+typedef int (*cliproxy_plugin_init_fn)(const cliproxy_host_api *host, cliproxy_plugin_api *plugin);
+typedef int (*cliproxy_plugin_call_fn)(const char *method, const uint8_t *payload, size_t payload_len, cliproxy_buffer *response);
+typedef void (*cliproxy_plugin_free_fn)(void *ptr, size_t len);
+typedef void (*cliproxy_plugin_shutdown_fn)(void);
+*/
+import "C"
+
+import (
+	"encoding/json"
+	"unsafe"
+)
+
+// abiVersion must match pluginabi.ABIVersion (1).
+const abiVersion uint32 = 1
+
+type envelope struct {
+	OK    bool            `json:"ok"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *envelopeError  `json:"error,omitempty"`
+}
+
+type envelopeError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func main() {}
+
+//export cliproxy_plugin_init
+func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+	plugin.abi_version = C.uint32_t(abiVersion)
+	return 0
+}
+
+//export cliproxyPluginCall
+func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+	m := C.GoString(method)
+	rawReq := copyCBuffer(request, requestLen)
+
+	rawResp, err := dispatch(m, rawReq)
+	if err != nil {
+		if de, ok := err.(*dispatchError); ok {
+			rawResp = errorEnvelope(de.Code(), de.Message())
+		} else {
+			rawResp = errorEnvelope("dispatch_error", err.Error())
+		}
+	}
+
+	writeResponse(response, rawResp)
+	return 0
+}
+
+//export cliproxyPluginFree
+func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
+	C.free(ptr)
+}
+
+//export cliproxyPluginShutdown
+func cliproxyPluginShutdown() {
+	// nothing to clean up currently
+}
+
+func copyCBuffer(ptr *C.uint8_t, length C.size_t) []byte {
+	if ptr == nil || length == 0 {
+		return nil
+	}
+	slice := C.GoBytes(unsafe.Pointer(ptr), C.int(length))
+	return slice
+}
+
+func dispatch(method string, rawReq []byte) ([]byte, error) {
+	switch method {
+	case "plugin.register":
+		return okEnvelopeJSON(registerPayload())
+	case "plugin.reconfigure":
+		return okEnvelopeJSON(registerPayload())
+
+	case "model.static":
+		return handleModelStatic(rawReq)
+	case "model.for_auth":
+		return handleModelForAuth(rawReq)
+
+	case "executor.identifier":
+		return handleExecutorIdentifier()
+	case "executor.execute":
+		return handleExecutorExecute(rawReq)
+	case "executor.execute_stream":
+		return handleExecutorExecuteStream(rawReq)
+	case "executor.http_request":
+		return handleExecutorHTTPRequest(rawReq)
+	case "executor.count_tokens":
+		return handleExecutorCountTokens(rawReq)
+
+	default:
+		return nil, &dispatchError{code: "unknown_method", message: "unknown method: " + method}
+	}
+}
+
+type dispatchError struct {
+	code    string
+	message string
+}
+
+func (e *dispatchError) Error() string   { return e.code + ": " + e.message }
+func (e *dispatchError) Code() string    { return e.code }
+func (e *dispatchError) Message() string { return e.message }
+
+func registerPayload() string {
+	return `{
+  "schema_version": 3,
+  "metadata": {
+    "Name": "OpenCode Free",
+    "Version": "0.1.0",
+    "Author": "kepeto",
+    "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
+    "Logo": "https://opencode.ai/favicon.ico",
+    "ConfigFields": [
+      {"Name": "opencode_base_url", "Type": "string", "Description": "OpenCode Zen base URL (default https://opencode.ai/zen)"}
+    ]
+  },
+  "capabilities": {
+    "model_provider": true,
+    "executor": true,
+    "executor_model_scope": "both",
+    "executor_input_formats": ["chat-completions"],
+    "executor_output_formats": ["chat-completions"]
+  }
+}`
+}
+
+func okEnvelopeJSON(result string) ([]byte, error) {
+	return json.Marshal(envelope{OK: true, Result: json.RawMessage(result)})
+}
+
+func errorEnvelope(code, message string) []byte {
+	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
+	return raw
+}
+
+func writeResponse(response *C.cliproxy_buffer, raw []byte) {
+	if response == nil || len(raw) == 0 {
+		return
+	}
+	ptr := C.malloc(C.size_t(len(raw)))
+	if ptr == nil {
+		return
+	}
+	slice := (*[1 << 30]byte)(ptr)[:len(raw):len(raw)]
+	copy(slice, raw)
+	response.ptr = (*C.uint8_t)(ptr)
+	response.len = C.size_t(len(raw))
+}
