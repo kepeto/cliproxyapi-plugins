@@ -12,7 +12,7 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	models := make([]map[string]interface{}, 0, len(allModels))
 	for _, m := range allModels {
 		models = append(models, map[string]interface{}{
-			"ID": m.ID,
+			"ID": prefixedModelID(m.ID),
 			"Object":                     "model",
 			"Created":                    0,
 			"OwnedBy":                    "opencode-free",
@@ -53,7 +53,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	for _, m := range allModels {
 		if alive {
 			models = append(models, map[string]interface{}{
-				"ID": m.ID,
+				"ID": prefixedModelID(m.ID),
 				"Object":                     "model",
 				"Created":                    0,
 				"OwnedBy":                    "opencode-free",
