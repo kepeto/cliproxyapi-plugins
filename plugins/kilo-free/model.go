@@ -43,7 +43,19 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	
 	responseModels := make([]map[string]interface{}, 0, len(models))
 	for _, id := range models {
-		responseModels = append(responseModels, buildModelInfo(id))
+		responseModels = append(responseModels, map[string]interface{}{
+			"ID":                         prefixedModelID(id),
+			"Object":                     "model",
+			"Created":                    0,
+			"OwnedBy":                    PROVIDER_ID,
+			"Type":                       PROVIDER_ID,
+			"Name":                       id,
+			"DisplayName":                id,
+			"SupportedGenerationMethods": []string{"chat"},
+			"SupportedInputModalities":   []string{"text"},
+			"SupportedOutputModalities":  []string{"text"},
+			"UserDefined": false,
+		})
 	}
 
 	result, _ := okEnvelopeJSON(mustJSON(map[string]interface{}{
@@ -68,7 +80,19 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	responseModels := make([]map[string]interface{}, 0, len(models))
 	catalogEntries := make([]map[string]interface{}, 0, len(models))
 	for _, id := range models {
-		responseModels = append(responseModels, buildModelInfo(id))
+		responseModels = append(responseModels, map[string]interface{}{
+			"ID":                         prefixedModelID(id),
+			"Object":                     "model",
+			"Created":                    0,
+			"OwnedBy":                    PROVIDER_ID,
+			"Type":                       PROVIDER_ID,
+			"Name":                       id,
+			"DisplayName":                id,
+			"SupportedGenerationMethods": []string{"chat"},
+			"SupportedInputModalities":   []string{"text"},
+			"SupportedOutputModalities":  []string{"text"},
+			"UserDefined": false,
+		})
 		catalogEntries = append(catalogEntries, map[string]interface{}{
 			"id":   id,
 			"name": id,
@@ -172,24 +196,4 @@ func healthCheckKilo() bool {
 		return false
 	}
 	return statusCode == 200
-}
-
-// buildModelInfo constructs the model info map for a real (unprefixed) model ID and
-// overlays models.dev capability metadata.
-func buildModelInfo(realID string) map[string]interface{} {
-	info := map[string]interface{}{
-		"ID":                         prefixedModelID(realID),
-		"Object":                     "model",
-		"Created":                    0,
-		"OwnedBy":                    PROVIDER_ID,
-		"Type":                       PROVIDER_ID,
-		"Name":                       realID,
-		"DisplayName":                realID,
-		"SupportedGenerationMethods": []string{"chat"},
-		"SupportedInputModalities":   []string{"text"},
-		"SupportedOutputModalities":  []string{"text"},
-		"UserDefined":                false,
-	}
-	enrichModelInfo(info, realID)
-	return info
 }
