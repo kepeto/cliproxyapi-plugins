@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,7 +22,18 @@ func handleAuthParse(raw []byte) ([]byte, error) {
 	if !store.valid() {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
-	auth := buildAuthData(store, "nous-portal", "nous-portal.json", "Nous Portal", nil)
+	fileName := "nous-portal.json"
+	label := "Nous Portal"
+	id := ProviderID
+	if fname, ok := probe["FileName"].(string); ok && strings.TrimSpace(fname) != "" {
+		fileName = strings.TrimSpace(fname)
+		stem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+		if stem != "" && strings.ToLower(stem) != ProviderID {
+			label = label + " (" + stem + ")"
+			id = stem
+		}
+	}
+	auth := buildAuthDataWithID(store, "nous-portal", fileName, label, id, nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Handled": true,
 		"Auth":    auth,
@@ -284,6 +296,30 @@ func buildAuthData(store storageJSON, provider, fileName, label string, extraMet
 	return map[string]any{
 		"Provider":    provider,
 		"ID":          provider,
+		"FileName":    fileName,
+		"Label":       label,
+		"StorageJSON": storage,
+		"Metadata":    meta,
+		"Attributes": map[string]string{
+			"source":   "plugin:" + provider,
+			"provider": provider,
+		},
+	}
+}
+
+func buildAuthDataWithID(store storageJSON, provider, fileName, label, id string, extraMeta map[string]any) map[string]any {
+	meta := map[string]any{
+		"type":            provider,
+		"username":        provider,
+		"portal_base_url": store.PortalBaseURL,
+	}
+	for k, v := range extraMeta {
+		meta[k] = v
+	}
+	storage, _ := json.Marshal(store)
+	return map[string]any{
+		"Provider":    provider,
+		"ID":          id,
 		"FileName":    fileName,
 		"Label":       label,
 		"StorageJSON": storage,
