@@ -11,23 +11,8 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	_ = rawReq
 	models := make([]map[string]interface{}, 0, len(allModels))
 	for _, m := range allModels {
-		models = append(models, map[string]interface{}{
-			"ID": prefixedModelID(m.ID),
-			"Object":                     "model",
-			"Created":                    0,
-			"OwnedBy":                    "opencode-free",
-			"Type":                       PROVIDER_ID,
-			"DisplayName":                m.Name,
-			"Name":                       m.Name,
-			"ContextLength":              m.ContextWindow,
-			"MaxCompletionTokens":        m.MaxTokens,
-			"SupportedGenerationMethods": []string{"chat"},
-			"SupportedInputModalities":   []string{"text"},
-			"SupportedOutputModalities":  []string{"text"},
-			"UserDefined":                false,
-		})
+		models = append(models, buildModelInfo(m))
 	}
-
 		return okEnvelopeJSON(mustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
 		"Models":   models,
@@ -52,21 +37,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	catalogEntries := make([]map[string]interface{}, 0)
 	for _, m := range allModels {
 		if alive {
-			models = append(models, map[string]interface{}{
-				"ID": prefixedModelID(m.ID),
-				"Object":                     "model",
-				"Created":                    0,
-				"OwnedBy":                    "opencode-free",
-				"Type":                       PROVIDER_ID,
-				"DisplayName":                m.Name,
-				"Name":                       m.Name,
-				"ContextLength":              m.ContextWindow,
-				"MaxCompletionTokens":        m.MaxTokens,
-				"SupportedGenerationMethods": []string{"chat"},
-				"SupportedInputModalities":   []string{"text"},
-				"SupportedOutputModalities":  []string{"text"},
-				"UserDefined":                false,
-			})
+			models = append(models, buildModelInfo(m))
 			catalogEntries = append(catalogEntries, map[string]interface{}{
 				"id":   m.ID,
 				"name": m.Name,
@@ -106,4 +77,27 @@ func healthCheckOpenCode() bool {
 		return false
 	}
 	return statusCode == 200
+}
+
+// buildModelInfo constructs the model info map for a known model and overlays
+// models.dev capability metadata (which overrides the static ContextWindow/MaxTokens
+// when available).
+func buildModelInfo(m ModelDef) map[string]interface{} {
+	info := map[string]interface{}{
+		"ID":                         prefixedModelID(m.ID),
+		"Object":                     "model",
+		"Created":                    0,
+		"OwnedBy":                    PROVIDER_ID,
+		"Type":                       PROVIDER_ID,
+		"DisplayName":                m.Name,
+		"Name":                       m.Name,
+		"ContextLength":              m.ContextWindow,
+		"MaxCompletionTokens":        m.MaxTokens,
+		"SupportedGenerationMethods": []string{"chat"},
+		"SupportedInputModalities":   []string{"text"},
+		"SupportedOutputModalities":  []string{"text"},
+		"UserDefined":                false,
+	}
+	enrichModelInfo(info, m.ID)
+	return info
 }
