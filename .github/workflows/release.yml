@@ -403,7 +403,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/dist"
-          sha256sum *.zip *.tar.gz > checksums.txt
+          sha256sum *.zip > checksums.txt
       - name: Upload checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
