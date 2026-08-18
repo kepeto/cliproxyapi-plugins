@@ -28,15 +28,18 @@ jobs:
           updated_notes_file="$(mktemp)"
           trap 'rm -f "$release_notes_file" "$generated_notes_file" "$changelog_entries_file" "$updated_notes_file"' EXIT
 
-          cat > "$release_notes_file" <<'EOF'
+          cat > "$release_notes_file" <<'NOTES'
           <!-- plugin-release-assets:start -->
           ## Release Assets
 
-          - `nous-portal_<version>_linux_<arch>.so.tar.gz` — `.so` plugin for Linux.
-          - `nous-portal_<version>_darwin_<arch>.so.tar.gz` — `.dylib` plugin for macOS.
+          - `nous-portal_<version>_<os>_<arch>.so.tar.gz` — `.so` plugin for Linux/macOS.
           - `nous-portal_<version>_windows_<arch>.zip` — `.dll` plugin for Windows.
+          - `nous-portal-free_<version>_<os>_<arch>.so.tar.gz` — free Nous Portal plugin.
+          - `opencode-free_<version>_<os>_<arch>.so.tar.gz` — OpenCode Zen free plugin.
+          - `kilo-free_<version>_<os>_<arch>.so.tar.gz` — KiloCode free plugin.
+          - `registry.json` — plugin store registry.
           <!-- plugin-release-assets:end -->
-          EOF
+          NOTES
 
           git fetch --force --tags
           previous_tag=""
@@ -79,26 +82,35 @@ jobs:
           fi
 
   build:
-    name: build ${{ matrix.target }}
+    name: build ${{ matrix.plugin }} ${{ matrix.target }}
     needs: prepare-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: linux-amd64
+          - plugin: nous-portal
+            plugin_dir: plugins/nous-portal
+            binary_name: nous-portal
+            target: linux-amd64
             runner: ubuntu-latest
             goos: linux
             goarch: amd64
             asset_arch: amd64
             archive_format: tar.gz
-          - target: linux-arm64
+          - plugin: nous-portal
+            plugin_dir: plugins/nous-portal
+            binary_name: nous-portal
+            target: linux-arm64
             runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
             asset_arch: aarch64
             archive_format: tar.gz
-          - target: linux-arm
+          - plugin: nous-portal
+            plugin_dir: plugins/nous-portal
+            binary_name: nous-portal
+            target: linux-arm
             runner: ubuntu-latest
             goos: linux
             goarch: arm
@@ -106,19 +118,196 @@ jobs:
             archive_format: tar.gz
             cross: gcc-arm-linux-gnueabihf
             cc: arm-linux-gnueabihf-gcc
-          - target: darwin-amd64
+          - plugin: nous-portal
+            plugin_dir: plugins/nous-portal
+            binary_name: nous-portal
+            target: darwin-amd64
             runner: macos-15-intel
             goos: darwin
             goarch: amd64
             asset_arch: amd64
             archive_format: tar.gz
-          - target: darwin-arm64
+          - plugin: nous-portal
+            plugin_dir: plugins/nous-portal
+            binary_name: nous-portal
+            target: darwin-arm64
             runner: macos-15
             goos: darwin
             goarch: arm64
             asset_arch: aarch64
             archive_format: tar.gz
-          - target: windows-amd64
+          - plugin: nous-portal
+            plugin_dir: plugins/nous-portal
+            binary_name: nous-portal
+            target: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: zip
+          - plugin: nous-portal-free
+            plugin_dir: plugins/nous-portal-free
+            binary_name: nous-portal-free
+            target: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - plugin: nous-portal-free
+            plugin_dir: plugins/nous-portal-free
+            binary_name: nous-portal-free
+            target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - plugin: nous-portal-free
+            plugin_dir: plugins/nous-portal-free
+            binary_name: nous-portal-free
+            target: linux-arm
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm
+            asset_arch: arm
+            archive_format: tar.gz
+            cross: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
+          - plugin: nous-portal-free
+            plugin_dir: plugins/nous-portal-free
+            binary_name: nous-portal-free
+            target: darwin-amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - plugin: nous-portal-free
+            plugin_dir: plugins/nous-portal-free
+            binary_name: nous-portal-free
+            target: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - plugin: nous-portal-free
+            plugin_dir: plugins/nous-portal-free
+            binary_name: nous-portal-free
+            target: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: zip
+          - plugin: opencode-free
+            plugin_dir: plugins/opencode-free
+            binary_name: opencode-free
+            target: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - plugin: opencode-free
+            plugin_dir: plugins/opencode-free
+            binary_name: opencode-free
+            target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - plugin: opencode-free
+            plugin_dir: plugins/opencode-free
+            binary_name: opencode-free
+            target: linux-arm
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm
+            asset_arch: arm
+            archive_format: tar.gz
+            cross: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
+          - plugin: opencode-free
+            plugin_dir: plugins/opencode-free
+            binary_name: opencode-free
+            target: darwin-amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - plugin: opencode-free
+            plugin_dir: plugins/opencode-free
+            binary_name: opencode-free
+            target: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - plugin: opencode-free
+            plugin_dir: plugins/opencode-free
+            binary_name: opencode-free
+            target: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: zip
+          - plugin: kilo-free
+            plugin_dir: plugins/kilo-free
+            binary_name: kilo-free
+            target: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - plugin: kilo-free
+            plugin_dir: plugins/kilo-free
+            binary_name: kilo-free
+            target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - plugin: kilo-free
+            plugin_dir: plugins/kilo-free
+            binary_name: kilo-free
+            target: linux-arm
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm
+            asset_arch: arm
+            archive_format: tar.gz
+            cross: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
+          - plugin: kilo-free
+            plugin_dir: plugins/kilo-free
+            binary_name: kilo-free
+            target: darwin-amd64
+            runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            asset_arch: amd64
+            archive_format: tar.gz
+          - plugin: kilo-free
+            plugin_dir: plugins/kilo-free
+            binary_name: kilo-free
+            target: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            asset_arch: aarch64
+            archive_format: tar.gz
+          - plugin: kilo-free
+            plugin_dir: plugins/kilo-free
+            binary_name: kilo-free
+            target: windows-amd64
             runner: windows-latest
             goos: windows
             goarch: amd64
@@ -132,7 +321,7 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
-          cache-dependency-path: plugins/nous-portal/go.sum
+          cache-dependency-path: ${{ matrix.plugin_dir }}/go.sum
       - name: Install cross-compiler
         shell: bash
         run: |
@@ -156,10 +345,13 @@ jobs:
           ASSET_ARCH: ${{ matrix.asset_arch }}
           ARCHIVE_FORMAT: ${{ matrix.archive_format }}
           CC: ${{ matrix.cc }}
+          PLUGIN: ${{ matrix.plugin }}
+          PLUGIN_DIR: ${{ matrix.plugin_dir }}
+          BINARY_NAME: ${{ matrix.binary_name }}
         run: |
           set -euo pipefail
           workspace="$GITHUB_WORKSPACE"
-          archive_dir="$workspace/dist/${TARGET}"
+          archive_dir="$workspace/dist/${TARGET}/${PLUGIN}"
           ext=".so"
           if [[ "$GOOS" == "windows" ]]; then
             ext=".dll"
@@ -167,29 +359,29 @@ jobs:
             ext=".dylib"
           fi
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
-            archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
+            archive_name="${BINARY_NAME}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
           else
-            archive_name="nous-portal_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
+            archive_name="${BINARY_NAME}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.so.tar.gz"
           fi
           rm -rf "$archive_dir"
           mkdir -p "$archive_dir"
 
-          cd "$workspace/plugins/nous-portal"
-          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "$archive_dir/nous-portal${ext}" .
+          cd "$workspace/${PLUGIN_DIR}"
+          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "$archive_dir/${BINARY_NAME}${ext}" .
 
           cd "$workspace"
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             if [[ "$GOOS" == "windows" ]]; then
               powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
             else
-              zip -j "dist/$archive_name" "$archive_dir/nous-portal${ext}"
+              zip -j "dist/$archive_name" "$archive_dir/${BINARY_NAME}${ext}"
             fi
           else
-            tar -C "$archive_dir" -czf "dist/$archive_name" "nous-portal${ext}"
+            tar -C "$archive_dir" -czf "dist/$archive_name" "${BINARY_NAME}${ext}"
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.plugin }}-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -207,32 +399,184 @@ jobs:
             exit 1
           fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
-      - name: Refresh release checksums
-        continue-on-error: true
+
+  generate-registry:
+    name: generate plugin store registry
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Download all release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          tmp_dir="$(mktemp -d)"
-          trap 'rm -rf "$tmp_dir"' EXIT
-          gh release download "$GITHUB_REF_NAME" \
-            --pattern '*.tar.gz' \
-            --pattern '*.zip' \
-            --dir "$tmp_dir" \
-            --clobber
-          (
-            cd "$tmp_dir"
-            shopt -s nullglob
-            archives=(*.tar.gz *.zip)
-            if [[ ${#archives[@]} -eq 0 ]]; then
-              echo "No release archives found"
-              exit 0
-            fi
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "${archives[@]}" | sort -k2 > checksums.txt
-            else
-              shasum -a 256 "${archives[@]}" | sort -k2 > checksums.txt
-            fi
-          )
-          gh release upload "$GITHUB_REF_NAME" "$tmp_dir/checksums.txt" --clobber
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cd "$GITHUB_WORKSPACE/dist"
+          gh release download "$GITHUB_REF_NAME" --pattern '*.tar.gz' --pattern '*.zip' --clobber
+      - name: Generate registry.json
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$GITHUB_WORKSPACE/registry.json" <<JSON
+          {
+            "schema_version": 1,
+            "plugins": [
+              {
+                "id": "nous-portal",
+                "name": "Nous Portal",
+                "description": "OAuth device-code authentication for Nous Portal inference API",
+                "author": "kepeto",
+                "version": "${RELEASE_VERSION#v}",
+                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
+                "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+                "homepage": "https://portal.nousresearch.com",
+                "license": "MIT",
+                "tags": ["nous", "portal", "oauth", "inference"],
+                "install": {
+                  "type": "github-release",
+                  "artifacts": [
+                    {
+                      "goos": "linux",
+                      "goarch": "amd64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null || echo '0')
+                    },
+                    {
+                      "goos": "linux",
+                      "goarch": "arm64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_linux_arm64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm64.so.tar.gz" 2>/dev/null || echo '0')
+                    },
+                    {
+                      "goos": "linux",
+                      "goarch": "arm",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_linux_arm.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm.so.tar.gz" 2>/dev/null || echo '0')
+                    },
+                    {
+                      "goos": "darwin",
+                      "goarch": "amd64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_darwin_amd64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_amd64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_amd64.so.tar.gz" 2>/dev/null || echo '0')
+                    },
+                    {
+                      "goos": "darwin",
+                      "goarch": "arm64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_darwin_arm64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_arm64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_arm64.so.tar.gz" 2>/dev/null || echo '0')
+                    },
+                    {
+                      "goos": "windows",
+                      "goarch": "amd64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_windows_amd64.zip",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_windows_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_windows_amd64.zip" 2>/dev/null || echo '0')
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "nous-portal-free",
+                "name": "Nous Portal Free",
+                "description": "Nous Portal free models plugin for CLIProxyAPI",
+                "author": "kepeto",
+                "version": "${RELEASE_VERSION#v}",
+                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
+                "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+                "homepage": "https://portal.nousresearch.com",
+                "license": "MIT",
+                "tags": ["nous", "portal", "free", "oauth"],
+                "install": {
+                  "type": "github-release",
+                  "artifacts": [
+                    {
+                      "goos": "linux",
+                      "goarch": "amd64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null || echo '0')
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "opencode-free",
+                "name": "OpenCode Zen Free",
+                "description": "OpenCode Zen free models plugin for CLIProxyAPI",
+                "author": "kepeto",
+                "version": "${RELEASE_VERSION#v}",
+                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
+                "logo": "https://opencode.ai/favicon.ico",
+                "homepage": "https://opencode.ai",
+                "license": "MIT",
+                "tags": ["opencode", "free", "zen"],
+                "install": {
+                  "type": "github-release",
+                  "artifacts": [
+                    {
+                      "goos": "linux",
+                      "goarch": "amd64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/opencode-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/opencode-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/opencode-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null || echo '0')
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "kilo-free",
+                "name": "KiloCode Free",
+                "description": "KiloCode free models plugin for CLIProxyAPI",
+                "author": "kepeto",
+                "version": "${RELEASE_VERSION#v}",
+                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
+                "logo": "https://kilo.ai/favicon.ico",
+                "homepage": "https://kilo.ai",
+                "license": "MIT",
+                "tags": ["kilo", "free", "kilo-code"],
+                "install": {
+                  "type": "github-release",
+                  "artifacts": [
+                    {
+                      "goos": "linux",
+                      "goarch": "amd64",
+                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/kilo-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz",
+                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/kilo-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null | cut -d' ' -f1 || echo '')",
+                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/kilo-free_${RELEASE_VERSION#v}_linux_amd64.so.tar.gz" 2>/dev/null || echo '0')
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+          JSON
+      - name: Upload registry to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/registry.json" --clobber
+      - name: Commit registry to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout main
+          git pull origin main
+          cp "$GITHUB_WORKSPACE/registry.json" "$GITHUB_WORKSPACE/registry.json"
+          git add registry.json
+          git commit -m "chore: update plugin store registry to ${RELEASE_VERSION}"
+          git push origin main

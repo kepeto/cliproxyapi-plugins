@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "nous-portal",
+      "name": "Nous Portal",
+      "description": "OAuth device-code authentication for Nous Portal inference API",
+      "author": "kepeto",
+      "version": "0.1.2",
+      "repository": "https://github.com/kepeto/cliproxyapi-plugins",
+      "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+      "homepage": "https://portal.nousresearch.com",
+      "license": "MIT",
+      "tags": ["nous", "portal", "oauth", "inference"],
+      "install": {
+        "type": "github-release",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.2/nous-portal_0.1.2_linux_amd64.so.tar.gz",
+            "sha256": "8dbe88041e5c68b9e99c7c6a144728c2ac6d04387ae6108a34a0a904f6ec30d3",
+            "size": 0
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.2/nous-portal_0.1.2_linux_arm64.so.tar.gz",
+            "sha256": "23eb5567ffa0a34e289b1a33514e29d59a10f5c8c60b7ca233460f8206e39b06",
+            "size": 0
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.2/nous-portal_0.1.2_linux_arm.so.tar.gz",
+            "sha256": "9869ff162de42bdac64f42b54b87337d2ddfb2fb9db816a6ec91c3b29b03123f",
+            "size": 0
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.2/nous-portal_0.1.2_darwin_amd64.so.tar.gz",
+            "sha256": "ecf2f60c9f34b5942a863f635c25802dad56a6eb0bb0f12d9c4db474b171118a",
+            "size": 0
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.2/nous-portal_0.1.2_darwin_arm64.so.tar.gz",
+            "sha256": "b50e8349a3dd6310f0d3b2508bafa20510cec6c340e7c2f541528e31aa29271c",
+            "size": 0
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.2/nous-portal_0.1.2_windows_amd64.zip",
+            "sha256": "ba435e537b408bf93705089b4c6e49030bb030f6b5f775e1d224d4f5c26113ba",
+            "size": 0
+          }
+        ]
+      }
+    }
+  ]
+}
