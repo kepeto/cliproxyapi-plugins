@@ -44,7 +44,7 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	responseModels := make([]map[string]interface{}, 0, len(models))
 	for _, id := range models {
 		responseModels = append(responseModels, map[string]interface{}{
-			"ID":                         id,
+			"ID":                         prefixedModelID(id),
 			"Object":                     "model",
 			"Created":                    0,
 			"OwnedBy":                    PROVIDER_ID,
@@ -81,7 +81,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	catalogEntries := make([]map[string]interface{}, 0, len(models))
 	for _, id := range models {
 		responseModels = append(responseModels, map[string]interface{}{
-			"ID":                         id,
+			"ID":                         prefixedModelID(id),
 			"Object":                     "model",
 			"Created":                    0,
 			"OwnedBy":                    PROVIDER_ID,

@@ -47,7 +47,7 @@ var fallbackModels = []string{
 func modelStaticPayload() string {
 	models := make([]map[string]any, 0, len(fallbackModels))
 	for _, id := range fallbackModels {
-		models = append(models, modelInfo(id, id))
+		models = append(models, modelInfo(prefixedModelID(id), id))
 	}
 	return mustJSON(map[string]any{
 		"Provider": ProviderID,
@@ -89,7 +89,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 
 	models := make([]map[string]any, 0, len(freeModels))
 	for _, m := range freeModels {
-		models = append(models, modelInfo(m.ID, m.ID))
+		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
 	}
 	if len(models) == 0 {
 		return okEnvelopeJSONStr(modelStaticPayload())

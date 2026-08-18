@@ -45,7 +45,9 @@ func convertToOpenAI(req map[string]interface{}, modelID string) map[string]inte
 			if err == nil {
 				var openaiReq map[string]interface{}
 				if err := json.Unmarshal(decoded, &openaiReq); err == nil {
-					if _, ok := openaiReq["model"]; !ok {
+					if m, ok := openaiReq["model"].(string); ok {
+						openaiReq["model"] = stripModelPrefix(m)
+					} else {
 						openaiReq["model"] = modelID
 					}
 					return openaiReq
@@ -139,12 +141,12 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	if modelID == "" {
 		return errorEnvelope("invalid_request", "missing model"), nil
 	}
-
-	if !modelIDs[modelID] {
+	baseModelID := stripModelPrefix(modelID)
+	if !modelIDs[baseModelID] {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
 
-	openaiReq := convertToOpenAI(req, modelID)
+	openaiReq := convertToOpenAI(req, baseModelID)
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil

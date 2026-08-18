@@ -16,14 +16,6 @@ func handleExecutorIdentifier() ([]byte, error) {
 	return okEnvelopeJSON(`{"Identifier":"` + EXECUTOR_ID + `"}`)
 }
 
-func stripModelPrefix(modelID string) string {
-	prefix := PROVIDER_ID + "/"
-	if strings.HasPrefix(modelID, prefix) {
-		return strings.TrimPrefix(modelID, prefix)
-	}
-	return modelID
-}
-
 func convertToOpenAI(req map[string]interface{}, baseModelID string) map[string]interface{} {
 		// Prefer decoded Payload if present
 		if payload, ok := req["Payload"].(string); ok && payload != "" {
@@ -31,7 +23,9 @@ func convertToOpenAI(req map[string]interface{}, baseModelID string) map[string]
 			if err == nil {
 				var openaiReq map[string]interface{}
 				if err := json.Unmarshal(decoded, &openaiReq); err == nil {
-					if _, ok := openaiReq["model"]; !ok {
+					if m, ok := openaiReq["model"].(string); ok {
+						openaiReq["model"] = stripModelPrefix(m)
+					} else {
 						openaiReq["model"] = baseModelID
 					}
 					return openaiReq
