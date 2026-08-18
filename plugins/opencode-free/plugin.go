@@ -159,7 +159,7 @@ func registerPayload() string {
   "metadata": {
     "Name": "OpenCode Zen Free",
     "Description": "Free models from OpenCode Zen inference API",
-    "Version": "0.1.13",
+    "Version": "0.1.14",
     "Prefix": "opencode-free",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
