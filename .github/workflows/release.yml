@@ -574,8 +574,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Save generated registry to avoid checkout conflict
+          mv "$GITHUB_WORKSPACE/registry.json" /tmp/registry.json
           git checkout main
           git pull origin main
+          mv /tmp/registry.json "$GITHUB_WORKSPACE/registry.json"
           
           git add registry.json
           git commit -m "chore: update plugin store registry to ${RELEASE_VERSION}"
