@@ -113,9 +113,12 @@ func mdLookup(realID string) (mdModel, bool) {
 	if m, ok := mdCache[realID]; ok {
 		return m, true
 	}
-	if stripped := strings.TrimSuffix(realID, ":free"); stripped != realID {
-		if m, ok := mdCache[stripped]; ok {
-			return m, true
+	// Free upstreams may suffix model IDs with ":free" or "-free"; models.dev keys omit it.
+	for _, suffix := range []string{":free", "-free"} {
+		if stripped := strings.TrimSuffix(realID, suffix); stripped != realID {
+			if m, ok := mdCache[stripped]; ok {
+				return m, true
+			}
 		}
 	}
 	return mdModel{}, false

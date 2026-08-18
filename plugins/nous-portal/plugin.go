@@ -179,7 +179,7 @@ func registerPayload() string {
   "metadata": {
     "Name": "Nous Portal",
     "Description": "OAuth device-code authentication for Nous Portal inference API",
-    "Version": "0.1.11",
+    "Version": "0.1.12",
     "Prefix": "nous-portal",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
