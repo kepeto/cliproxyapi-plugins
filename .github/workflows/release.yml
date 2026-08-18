@@ -399,16 +399,6 @@ jobs:
             exit 1
           fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
-      - name: Generate checksums.txt
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE/dist"
-          sha256sum *.zip > checksums.txt
-      - name: Upload checksums.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
 
   generate-registry:
     name: generate plugin store registry
@@ -427,6 +417,17 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cd "$GITHUB_WORKSPACE/dist"
           gh release download "$GITHUB_REF_NAME" --pattern '*.tar.gz' --pattern '*.zip' --clobber
+      - name: Generate checksums.txt
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/dist"
+          sha256sum *.zip > checksums.txt
+      - name: Upload checksums.txt to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
+
       - name: Generate registry.json
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
