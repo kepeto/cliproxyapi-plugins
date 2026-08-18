@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	KILO_CHAT_URL    = "https://api.kilo.ai/api/gateway/chat/completions"
+	KILO_CHAT_URL    = "https://api.kilo.ai/api/gateway/v1/chat/completions"
 	KILO_MODELS_URL  = "https://api.kilo.ai/api/gateway/models"
 	KILO_API_BASE    = "https://api.kilo.ai/api/gateway"
 
@@ -61,7 +61,6 @@ func init() {
 
 func kiloHeaders() map[string]string {
 	return map[string]string{
-		"Authorization": "Bearer " + KILO_API_KEY,
 		"Content-Type":  "application/json",
 		"Accept":        "application/json",
 	}

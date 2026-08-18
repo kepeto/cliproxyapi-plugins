@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -11,36 +12,35 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	models := make([]map[string]interface{}, 0, len(allModels))
 	for _, m := range allModels {
 		models = append(models, map[string]interface{}{
-			"ID":          m.ID,
-			"Object":      "model",
-			"Created":     0,
-			"OwnedBy":     "opencode-free",
-			"Provider":    PROVIDER_ID,
-			"Name":        m.Name,
-			"Reasoning":   m.Reasoning,
-			"ContextWindow": m.ContextWindow,
-			"MaxTokens":   m.MaxTokens,
-			"Input":       []string{"text"},
-			"Cost": map[string]interface{}{
-				"Input":  0,
-				"Output": 0,
-				"CacheRead": 0,
-				"CacheWrite": 0,
-			},
+			"ID": m.ID,
+			"Object":                     "model",
+			"Created":                    0,
+			"OwnedBy":                    "opencode-free",
+			"Type":                       PROVIDER_ID,
+			"DisplayName":                m.Name,
+			"Name":                       m.Name,
+			"ContextLength":              m.ContextWindow,
+			"MaxCompletionTokens":        m.MaxTokens,
+			"SupportedGenerationMethods": []string{"chat"},
+			"SupportedInputModalities":   []string{"text"},
+			"SupportedOutputModalities":  []string{"text"},
+			"UserDefined":                false,
 		})
 	}
-	return okEnvelopeJSON(mustJSON(map[string]interface{}{
+
+		return okEnvelopeJSON(mustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
 		"Models":   models,
 	}))
 }
 
 func handleModelForAuth(rawReq []byte) ([]byte, error) {
-	var req map[string]string
+
+	var req map[string]any
 	if err := json.Unmarshal(rawReq, &req); err != nil {
 		return errorEnvelope("invalid_request", "bad json"), nil
 	}
-	authID := req["AuthID"]
+	authID, _ := req["AuthID"].(string)
 	if authID == "" {
 		return errorEnvelope("invalid_request", "missing auth_id"), nil
 	}
@@ -49,33 +49,40 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	alive := healthCheckOpenCode()
 
 	models := make([]map[string]interface{}, 0)
+	catalogEntries := make([]map[string]interface{}, 0)
 	for _, m := range allModels {
 		if alive {
 			models = append(models, map[string]interface{}{
-				"ID":          m.ID,
-				"Object":      "model",
-				"Created":     0,
-				"OwnedBy":     "opencode-free",
-				"Provider":    PROVIDER_ID,
-				"Name":        m.Name,
-				"Reasoning":   m.Reasoning,
-				"ContextWindow": m.ContextWindow,
-				"MaxTokens":   m.MaxTokens,
-				"Input":       []string{"text"},
-				"Cost": map[string]interface{}{
-					"Input":  0,
-					"Output": 0,
-					"CacheRead": 0,
-					"CacheWrite": 0,
-				},
+				"ID": m.ID,
+				"Object":                     "model",
+				"Created":                    0,
+				"OwnedBy":                    "opencode-free",
+				"Type":                       PROVIDER_ID,
+				"DisplayName":                m.Name,
+				"Name":                       m.Name,
+				"ContextLength":              m.ContextWindow,
+				"MaxCompletionTokens":        m.MaxTokens,
+				"SupportedGenerationMethods": []string{"chat"},
+				"SupportedInputModalities":   []string{"text"},
+				"SupportedOutputModalities":  []string{"text"},
+				"UserDefined":                false,
+			})
+			catalogEntries = append(catalogEntries, map[string]interface{}{
+				"id":   m.ID,
+				"name": m.Name,
 			})
 		}
 	}
 
+	catalogJSON, _ := json.Marshal(catalogEntries)
+
 	return okEnvelopeJSON(mustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
 		"AuthID":   authID,
-		"Models":   models,
+		"AuthUpdate": map[string]interface{}{
+			"model_catalog": base64.StdEncoding.EncodeToString(catalogJSON),
+		},
+		"Models": models,
 		"Upstream": map[string]interface{}{
 			"OpencodeAlive": alive,
 			"CheckedAt":     time.Now().Format(time.RFC3339),

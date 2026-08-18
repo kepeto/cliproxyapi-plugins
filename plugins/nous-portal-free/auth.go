@@ -21,7 +21,7 @@ func handleAuthParse(raw []byte) ([]byte, error) {
 	if !store.valid() {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
-	auth := buildAuthData(store, "nous-portal", "nous-portal.json", "Nous Portal", nil)
+	auth := buildAuthData(store, "nous-portal-free", "nous-portal.json", "Nous Portal", nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Handled": true,
 		"Auth":    auth,
@@ -139,7 +139,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			Scope:            ls.scope,
 		}
 		loginStates.delete(req.State)
-		auth := buildAuthData(store, "nous-portal", "nous-portal.json", "Nous Portal", nil)
+		auth := buildAuthData(store, "nous-portal-free", "nous-portal.json", "Nous Portal", nil)
 		return okEnvelopeJSON(mustJSON(map[string]any{
 			"Status":  "success",
 			"Message": "Nous Portal login complete",
@@ -241,7 +241,7 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		ClientID:         clientID,
 		Scope:            firstNonEmpty(tok.Scope, store.Scope),
 	}
-	auth := buildAuthData(next, "nous-portal", "nous-portal.json", "Nous Portal", nil)
+	auth := buildAuthData(next, "nous-portal-free", "nous-portal.json", "Nous Portal", nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Auth":             auth,
 		"NextRefreshAfter": next.ExpiresAt.Add(-5 * time.Minute).Format(time.RFC3339),
@@ -270,12 +270,8 @@ func expiryFromNow(expiresIn int) time.Time {
 func buildAuthData(store storageJSON, provider, fileName, label string, extraMeta map[string]any) map[string]any {
 	meta := map[string]any{
 		"type":            provider,
-		"username":        "nous-portal",
+		"username":        "nous-portal-free",
 		"portal_base_url": store.PortalBaseURL,
-		"logo":            "https://hermes-agent.nousresearch.com/favicon.ico",
-		"icon":            "https://hermes-agent.nousresearch.com/favicon.ico",
-		"description":     "Nous Portal OAuth",
-		"homepage":        "https://portal.nousresearch.com",
 	}
 	for k, v := range extraMeta {
 		meta[k] = v

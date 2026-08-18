@@ -6,7 +6,9 @@ package main
 
 typedef struct {
 	uint32_t abi_version;
-	void *reserved;
+	void (*call)(void *call_ctx, const char *method, const uint8_t *payload, size_t payload_len, uint8_t **out, size_t *out_len);
+	void (*free_buffer)(void *call_ctx, void *ptr, size_t len);
+	void (*shutdown)(void);
 } cliproxy_plugin_api;
 
 typedef struct {
@@ -25,6 +27,10 @@ typedef int (*cliproxy_plugin_init_fn)(const cliproxy_host_api *host, cliproxy_p
 typedef int (*cliproxy_plugin_call_fn)(const char *method, const uint8_t *payload, size_t payload_len, cliproxy_buffer *response);
 typedef void (*cliproxy_plugin_free_fn)(void *ptr, size_t len);
 typedef void (*cliproxy_plugin_shutdown_fn)(void);
+
+extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
+extern void cliproxyPluginFree(void*, size_t);
+extern void cliproxyPluginShutdown(void);
 */
 import "C"
 
@@ -45,13 +51,20 @@ type envelope struct {
 type envelopeError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
 func main() {}
 
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+	if plugin == nil {
+		return 1
+	}
 	plugin.abi_version = C.uint32_t(abiVersion)
+	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
+	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
+	plugin.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
 	return 0
 }
 
@@ -98,8 +111,20 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 	case "plugin.reconfigure":
 		return okEnvelopeJSON(registerPayload())
 
+	case "auth.identifier":
+		return okEnvelopeJSON(`{"Identifier":"` + PROVIDER_ID + `"}`)
+	case "auth.parse":
+		return handleAuthParse(rawReq)
+	case "auth.login.start":
+		return errorEnvelope("login_not_supported", "no login needed for free models"), nil
+	case "auth.login.poll":
+		return errorEnvelope("login_not_supported", "no login needed for free models"), nil
+	case "auth.refresh":
+		return errorEnvelope("refresh_not_supported", "no refresh needed for free models"), nil
+
 	case "model.static":
 		return handleModelStatic(rawReq)
+
 	case "model.for_auth":
 		return handleModelForAuth(rawReq)
 
@@ -130,9 +155,10 @@ func (e *dispatchError) Message() string { return e.message }
 
 func registerPayload() string {
 	return `{
-  "schema_version": 3,
+  "schema_version": 2,
   "metadata": {
-    "Name": "OpenCode Free",
+    "Name": "OpenCode Zen Free",
+    "Description": "Free models from OpenCode Zen inference API",
     "Version": "0.1.0",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
@@ -142,6 +168,7 @@ func registerPayload() string {
     ]
   },
   "capabilities": {
+    "auth_provider": true,
     "model_provider": true,
     "executor": true,
     "executor_model_scope": "both",
@@ -157,6 +184,11 @@ func okEnvelopeJSON(result string) ([]byte, error) {
 
 func errorEnvelope(code, message string) []byte {
 	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
+	return raw
+}
+
+func errorEnvelopeWithStatus(code, message string, status int) []byte {
+	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message, HTTPStatus: status}})
 	return raw
 }
 

@@ -1,86 +1,185 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync"
 	"time"
+)
+
+var (
+	// Async catalog fetch
+	kiloCatalogMu sync.RWMutex
+	kiloCatalog   = staticKiloModels()
+	catalogLoaded bool
 )
 
 func handleModelStatic(rawReq []byte) ([]byte, error) {
 	_ = rawReq
-	models := make([]map[string]interface{}, 0, len(allModels))
-	for _, m := range allModels {
-		models = append(models, map[string]interface{}{
-			"ID":          m.ID,
-			"Object":      "model",
-			"Created":     0,
-			"OwnedBy":     "kilo-free",
-			"Provider":    PROVIDER_ID,
-			"Name":        m.Name,
-			"Reasoning":   m.Reasoning,
-			"ContextWindow": m.ContextWindow,
-			"MaxTokens":   m.MaxTokens,
-			"Input":       []string{"text"},
-			"Cost": map[string]interface{}{
-				"Input":  0,
-				"Output": 0,
-				"CacheRead": 0,
-				"CacheWrite": 0,
-			},
+	
+	// Start async catalog fetch if not loaded
+	if !catalogLoaded {
+		go func() {
+			set, err := fetchKiloCatalog()
+			if err == nil && len(set) > 0 {
+				models := make([]string, 0, len(set))
+				for id := range set {
+					models = append(models, id)
+				}
+				kiloCatalogMu.Lock()
+				kiloCatalog = models
+				catalogLoaded = true
+				kiloCatalogMu.Unlock()
+			}
+		}()
+	}
+	
+	kiloCatalogMu.RLock()
+	models := kiloCatalog
+	kiloCatalogMu.RUnlock()
+	
+	responseModels := make([]map[string]interface{}, 0, len(models))
+	for _, id := range models {
+		responseModels = append(responseModels, map[string]interface{}{
+			"ID":                         id,
+			"Object":                     "model",
+			"Created":                    0,
+			"OwnedBy":                    PROVIDER_ID,
+			"Type":                       PROVIDER_ID,
+			"Name":                       id,
+			"DisplayName":                id,
+			"SupportedGenerationMethods": []string{"chat"},
+			"SupportedInputModalities":   []string{"text"},
+			"SupportedOutputModalities":  []string{"text"},
+			"UserDefined": false,
 		})
 	}
-	return okEnvelopeJSON(mustJSON(map[string]interface{}{
+
+	result, _ := okEnvelopeJSON(mustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
-		"Models":   models,
+		"Models":   responseModels,
 	}))
+	return result, nil
 }
 
 func handleModelForAuth(rawReq []byte) ([]byte, error) {
-	var req map[string]string
+	var req map[string]any
 	if err := json.Unmarshal(rawReq, &req); err != nil {
-		return errorEnvelope("invalid_request", "bad json"), nil
-	}
-	authID := req["AuthID"]
-	if authID == "" {
-		return errorEnvelope("invalid_request", "missing auth_id"), nil
+		return okEnvelopeJSON(`{"Provider":"","AuthID":"","Models":[]}`)
 	}
 
-	// Health check upstream
-	alive := healthCheckKilo()
-
-	models := make([]map[string]interface{}, 0)
-	for _, m := range allModels {
-		if alive {
-			models = append(models, map[string]interface{}{
-				"ID":          m.ID,
-				"Object":      "model",
-				"Created":     0,
-				"OwnedBy":     "kilo-free",
-				"Provider":    PROVIDER_ID,
-				"Name":        m.Name,
-				"Reasoning":   m.Reasoning,
-				"ContextWindow": m.ContextWindow,
-				"MaxTokens":   m.MaxTokens,
-				"Input":       []string{"text"},
-				"Cost": map[string]interface{}{
-					"Input":  0,
-					"Output": 0,
-					"CacheRead": 0,
-					"CacheWrite": 0,
-				},
-			})
-		}
+	authID, _ := req["AuthID"].(string)
+	
+	kiloCatalogMu.RLock()
+	models := kiloCatalog
+	kiloCatalogMu.RUnlock()
+	
+	responseModels := make([]map[string]interface{}, 0, len(models))
+	catalogEntries := make([]map[string]interface{}, 0, len(models))
+	for _, id := range models {
+		responseModels = append(responseModels, map[string]interface{}{
+			"ID":                         id,
+			"Object":                     "model",
+			"Created":                    0,
+			"OwnedBy":                    PROVIDER_ID,
+			"Type":                       PROVIDER_ID,
+			"Name":                       id,
+			"DisplayName":                id,
+			"SupportedGenerationMethods": []string{"chat"},
+			"SupportedInputModalities":   []string{"text"},
+			"SupportedOutputModalities":  []string{"text"},
+			"UserDefined": false,
+		})
+		catalogEntries = append(catalogEntries, map[string]interface{}{
+			"id":   id,
+			"name": id,
+		})
 	}
 
-	return okEnvelopeJSON(mustJSON(map[string]interface{}{
+	catalogJSON, _ := json.Marshal(catalogEntries)
+
+	result, _ := okEnvelopeJSON(mustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
 		"AuthID":   authID,
-		"Models":   models,
-		"Upstream": map[string]interface{}{
-			"KiloAlive": alive,
-			"CheckedAt": time.Now().Format(time.RFC3339),
+		"AuthUpdate": map[string]interface{}{
+			"model_catalog": base64.StdEncoding.EncodeToString(catalogJSON),
 		},
+		"Models": responseModels,
 	}))
+	return result, nil
+}
+
+func fetchKiloCatalog() (map[string]bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, KILO_MODELS_URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer kilo-free")
+	req.Header.Set("Accept", "application/json")
+	
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("catalog returned %d", resp.StatusCode)
+	}
+	
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	
+	data, ok := result["data"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no data in catalog")
+	}
+	
+	set := make(map[string]bool)
+	for _, item := range data {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, ok := m["id"].(string)
+		if !ok || id == "" {
+			continue
+		}
+		isFree, _ := m["isFree"].(bool)
+		if isFree {
+			set[id] = true
+		}
+	}
+	
+	return set, nil
+}
+
+func staticKiloModels() []string {
+	return []string{
+		"kilo-auto/free",
+		"stepfun/step-3.7-flash:free",
+		"openrouter/free",
+		"tencent/hy3:free",
+		"poolside/laguna-s-2.1:free",
+		"poolside/laguna-xs-2.1:free",
+		"nvidia/nemotron-3-ultra-550b-a55b:free",
+		"nvidia/nemotron-3-super-120b-a12b:free",
+		"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+		"nvidia/nemotron-3.5-lightning:free",
+		"nvidia/nemotron-3.5-content-safety:free",
+		"cohere/north-mini-code:free",
+		"z-ai/glm-5.2:free",
+		"liquid/lfm-2.5-2.6b:free",
+		"dots-studio/dots-3-note-preview:free",
+	}
 }
 
 // healthCheckKilo checks if KiloCode /models endpoint is alive
@@ -89,10 +188,8 @@ func healthCheckKilo() bool {
 	if err != nil {
 		return false
 	}
-	req.Header = http.Header{}
-	for k, v := range kiloHeaders() {
-		req.Header.Set(k, v)
-	}
+	req.Header.Set("Authorization", "Bearer kilo-free")
+	req.Header.Set("Accept", "application/json")
 
 	statusCode, _, err := httpDo(req)
 	if err != nil {

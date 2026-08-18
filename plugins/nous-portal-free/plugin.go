@@ -142,7 +142,7 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 		return okEnvelopeJSON(registerPayload())
 
 	case "auth.identifier":
-		return okEnvelopeJSON(`{"Identifier":"nous-portal"}`)
+		return okEnvelopeJSON(`{"Identifier":"nous-portal-free"}`)
 	case "auth.parse":
 		return handleAuthParse(rawReq)
 	case "auth.login.start":
@@ -158,7 +158,7 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 		return handleModelForAuth(rawReq)
 
 	case "executor.identifier":
-		return okEnvelopeJSON(`{"Identifier":"nous-portal"}`)
+		return okEnvelopeJSON(`{"Identifier":"nous-portal-free"}`)
 	case "executor.execute":
 		return handleExecutorExecute(rawReq)
 	case "executor.execute_stream":
@@ -177,8 +177,8 @@ func registerPayload() string {
 	return `{
   "schema_version": 2,
   "metadata": {
-    "Name": "Nous Portal",
-    "Description": "OAuth device-code authentication for Nous Portal inference API",
+    "Name": "Nous Portal Free",
+    "Description": "Free models only from Nous Portal inference API",
     "Version": "0.1.0",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",

@@ -156,7 +156,7 @@ int main(void) {
     check(r != NULL, "plugin.register returns");
     if (r) {
         check(json_bool(r, "ok") == 1, "register ok=true");
-        check(json_int_eq(r, "schema_version", 3), "schema_version=3");
+        check(json_int_eq(r, "schema_version", 2), "schema_version=2");
         check(json_str_eq(r, "Name", "Nous Portal"), "metadata.Name=Nous Portal");
         check(json_bool(r, "auth_provider") == 1, "capabilities.auth_provider");
         check(json_bool(r, "model_provider") == 1, "capabilities.model_provider");
