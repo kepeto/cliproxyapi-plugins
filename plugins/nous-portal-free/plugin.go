@@ -179,7 +179,7 @@ func registerPayload() string {
   "metadata": {
     "Name": "Nous Portal Free",
     "Description": "Free models only from Nous Portal inference API",
-    "Version": "0.1.8",
+    "Version": "0.1.9",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
     "Logo": "https://hermes-agent.nousresearch.com/favicon.ico",
