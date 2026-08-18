@@ -40,7 +40,9 @@ type mdModel struct {
 
 var (
 	mdMu             sync.RWMutex
-	mdCache          map[string]mdModel
+	mdCache          map[string]mdModel        // exact lowercase id -> model
+	mdVariantCache   map[string]mdModel        // id with common upstream suffixes -> model
+	mdProviderCache  map[string]map[string]mdModel // provider -> normalized name -> model
 	mdLoaded         bool
 	mdLoading        bool
 	mdRefreshStarted bool
@@ -96,31 +98,118 @@ func loadModelsDev() {
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return
 	}
+
+	cache := make(map[string]mdModel, len(parsed))
+	variantCache := make(map[string]mdModel, len(parsed)*6)
+	providerCache := make(map[string]map[string]mdModel)
+
+	for _, m := range parsed {
+		id := strings.ToLower(m.ID)
+		cache[id] = m
+
+		// provider-aware index
+		parts := strings.SplitN(id, "/", 2)
+		if len(parts) == 2 {
+			provider, name := parts[0], parts[1]
+			if providerCache[provider] == nil {
+				providerCache[provider] = make(map[string]mdModel)
+			}
+			providerCache[provider][name] = m
+		}
+
+		// common suffixes appended by upstream platforms
+		for _, suffix := range []string{":free", "-free", ":preview", "-preview", ":beta", "-beta"} {
+			variantCache[id+suffix] = m
+		}
+	}
+
 	mdMu.Lock()
-	mdCache = parsed
+	mdCache = cache
+	mdVariantCache = variantCache
+	mdProviderCache = providerCache
 	mdLoaded = true
 	mdMu.Unlock()
 }
 
+// refresh reloads the catalog in the background.
+func refresh() {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(modelsDevURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var parsed map[string]mdModel
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return
+	}
+
+	cache := make(map[string]mdModel, len(parsed))
+	variantCache := make(map[string]mdModel, len(parsed)*6)
+	providerCache := make(map[string]map[string]mdModel)
+
+	for _, m := range parsed {
+		id := strings.ToLower(m.ID)
+		cache[id] = m
+		parts := strings.SplitN(id, "/", 2)
+		if len(parts) == 2 {
+			provider, name := parts[0], parts[1]
+			if providerCache[provider] == nil {
+				providerCache[provider] = make(map[string]mdModel)
+			}
+			providerCache[provider][name] = m
+		}
+		for _, suffix := range []string{":free", "-free", ":preview", "-preview", ":beta", "-beta"} {
+			variantCache[id+suffix] = m
+		}
+	}
+
+	mdMu.Lock()
+	mdCache = cache
+	mdVariantCache = variantCache
+	mdProviderCache = providerCache
+	mdMu.Unlock()
+}
+
 // mdLookup resolves a real (unprefixed) model ID to its models.dev metadata.
-// Free upstreams suffix model IDs with ":free"; models.dev keys omit it.
+// Lookup order:
+//  1. exact match
+//  2. variant match (upstream appended common suffixes like :free/-free/-preview)
+//  3. provider-aware exact match (strip suffixes within the same provider namespace)
 func mdLookup(realID string) (mdModel, bool) {
 	mdMu.RLock()
 	defer mdMu.RUnlock()
-	if mdCache == nil {
-		return mdModel{}, false
-	}
-	if m, ok := mdCache[realID]; ok {
+
+	key := strings.ToLower(realID)
+
+	if m, ok := mdCache[key]; ok {
 		return m, true
 	}
-	// Free upstreams may suffix model IDs with ":free" or "-free"; models.dev keys omit it.
-	for _, suffix := range []string{":free", "-free"} {
-		if stripped := strings.TrimSuffix(realID, suffix); stripped != realID {
-			if m, ok := mdCache[stripped]; ok {
+	if m, ok := mdVariantCache[key]; ok {
+		return m, true
+	}
+
+	// provider-aware: if upstream carries a provider prefix, match inside that namespace
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) == 2 {
+		provider, name := parts[0], parts[1]
+		if providerMap, ok := mdProviderCache[provider]; ok {
+			if m, ok := providerMap[name]; ok {
 				return m, true
+			}
+			for _, suffix := range []string{":free", "-free", ":preview", "-preview", ":beta", "-beta"} {
+				if stripped := strings.TrimSuffix(name, suffix); stripped != name {
+					if m, ok := providerMap[stripped]; ok {
+						return m, true
+					}
+				}
 			}
 		}
 	}
+
 	return mdModel{}, false
 }
 
