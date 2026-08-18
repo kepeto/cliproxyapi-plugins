@@ -9,7 +9,7 @@ import (
 
 // handleAuthParse recognizes opencode-free credential JSON files and returns the auth record.
 func handleAuthParse(raw []byte) ([]byte, error) {
-	fmt.Fprintf(os.Stderr, "opencode-free auth.parse: len=%d raw=%s\n", len(raw), string(raw[:100]))
+	fmt.Fprintf(os.Stderr, "opencode-free auth.parse: len=%d raw=%s\n", len(raw), safeTruncate(raw, 100))
 	var probe map[string]any
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return okEnvelopeJSON(`{"Handled":false}`)

@@ -10,7 +10,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
+
+var streamTransport = &http.Transport{
+	ResponseHeaderTimeout: 30 * time.Second,
+}
 
 func handleExecutorIdentifier() ([]byte, error) {
 	return okEnvelopeJSON(`{"Identifier":"` + EXECUTOR_ID + `"}`)
@@ -139,7 +144,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	}
 	if status != 200 {
 		buf := new(bytes.Buffer)
-		_, _ = io.Copy(buf, reader)
+		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+itoa(status)+": "+buf.String(), status), nil
 	}
@@ -292,7 +297,7 @@ func itoa(v int) string {
 
 	client := httpClient
 	if stream {
-		client = &http.Client{Timeout: 0} // No timeout for streaming
+		client = &http.Client{Transport: streamTransport}
 	}
 
 	resp, err := client.Do(req)
@@ -322,7 +327,7 @@ func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{Timeout: 0} // No timeout for streaming
+		client := &http.Client{Transport: streamTransport}
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, 0, err
@@ -330,39 +335,4 @@ func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
 		return resp.Body, resp.StatusCode, nil
 	}
 
-	// splitSSE splits an SSE response into individual event chunks
-func splitSSE(data []byte) [][]byte {
-	var chunks [][]byte
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	var currentChunk bytes.Buffer
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			eventData := strings.TrimPrefix(line, "data: ")
-			eventData = strings.TrimSpace(eventData)
-			if eventData == "[DONE]" {
-				if currentChunk.Len() > 0 {
-					chunks = append(chunks, currentChunk.Bytes())
-					currentChunk.Reset()
-				}
-				continue
-			}
-			if eventData != "" {
-				currentChunk.WriteString(eventData)
-				currentChunk.WriteByte('\n')
-			}
-		} else if line == "" && currentChunk.Len() > 0 {
-			chunks = append(chunks, currentChunk.Bytes())
-			currentChunk.Reset()
-		}
-	}
-	if currentChunk.Len() > 0 {
-		chunks = append(chunks, currentChunk.Bytes())
-	}
-
-	if len(chunks) == 0 {
-		return [][]byte{data}
-	}
-	return chunks
-}

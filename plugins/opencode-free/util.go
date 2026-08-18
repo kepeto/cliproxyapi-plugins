@@ -18,3 +18,14 @@ func base64encode(b []byte) string {
 	}
 	return base64.StdEncoding.EncodeToString(b)
 }
+
+// safeTruncate returns up to n bytes of b as a string, avoiding slice-bounds panics.
+func safeTruncate(b []byte, n int) string {
+	if n <= 0 || len(b) == 0 {
+		return ""
+	}
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n])
+}

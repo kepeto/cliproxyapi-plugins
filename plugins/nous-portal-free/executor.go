@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+var streamTransport = &http.Transport{
+	ResponseHeaderTimeout: 30 * time.Second,
+}
+
 // handleExecutorExecute performs a non-streaming OpenAI chat-completions call.
 func handleExecutorExecute(raw []byte) ([]byte, error) {
 	var req struct {
@@ -66,25 +70,40 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	}
 	if status != 200 {
 		buf := new(bytes.Buffer)
-		_, _ = io.Copy(buf, reader)
+		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+itoa(status)+": "+buf.String(), status), nil
 	}
 
 	// Drain the SSE stream and encode each raw chunk as base64 for the host envelope.
+	const (
+		maxStreamChunks = 100000
+		maxStreamBytes  = 100 * 1024 * 1024
+	)
 	chunks := make([]map[string]any, 0)
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var totalBytes int
 	for scanner.Scan() {
+		if len(chunks) >= maxStreamChunks {
+			_ = reader.Close()
+			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
+		}
 		line := scanner.Text()
 		if line == "" || line[0] == ':' {
 			continue
 		}
 		line = strings.TrimPrefix(line, "data: ")
-		chunks = append(chunks, map[string]any{"Payload": base64encode([]byte(line + "\n"))})
+		totalBytes += len(line) + 1
+		if totalBytes > maxStreamBytes {
+			_ = reader.Close()
+			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
+		}
+		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
-		chunks = append(chunks, map[string]any{"Err": err.Error()})
+		_ = reader.Close()
+		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	return okEnvelopeJSON(mustJSON(map[string]any{
@@ -213,7 +232,7 @@ func doChatStream(url, apiKey string, payload []byte) (io.ReadCloser, int, http.
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("User-Agent", "hermes-cli/0.20.1")
-	client := &http.Client{Timeout: 0}
+	client := &http.Client{Transport: streamTransport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, nil, err
