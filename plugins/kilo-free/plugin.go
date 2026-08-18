@@ -161,7 +161,7 @@ func registerPayload() string {
   "metadata": {
     "Name": "KiloCode Free",
     "Description": "Free models from KiloCode inference API",
-    "Version": "0.1.14",
+    "Version": "0.1.16",
     "Prefix": "kilo-free",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
