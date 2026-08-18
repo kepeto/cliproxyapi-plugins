@@ -146,7 +146,7 @@ func fetchModelCatalog(baseURL, apiKey string) ([]rawCatalogModel, error) {
 }
 
 func modelInfo(id, name string) map[string]any {
-	return map[string]any{
+	info := map[string]any{
 		"ID":                         id,
 		"Object":                     "model",
 		"OwnedBy":                    ProviderID,
@@ -160,4 +160,6 @@ func modelInfo(id, name string) map[string]any {
 		"SupportedOutputModalities":  []string{"text"},
 		"UserDefined":                false,
 	}
+	enrichModelInfo(info, name)
+	return info
 }
