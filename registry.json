@@ -6,7 +6,7 @@
       "name": "Nous Portal",
       "description": "OAuth device-code authentication for Nous Portal inference API",
       "author": "kepeto",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "repository": "https://github.com/kepeto/cliproxyapi-plugins",
       "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
       "homepage": "https://portal.nousresearch.com",
@@ -18,44 +18,44 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal_0.1.13_linux_amd64.zip",
-            "sha256": "8a54cb806c0dea2a21dbf1dccc90f188aa00c9a76294353ef8009bb4bd2d7ac5",
-            "size": 4960208
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal_0.1.14_linux_amd64.zip",
+            "sha256": "6e9f5b00268af27878390751f5be7d327b3be2891bfc2651250fd792a1a65090",
+            "size": 4945960
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal_0.1.13_linux_arm64.zip",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal_0.1.14_linux_arm64.zip",
             "sha256": "",
             "size": 0
           },
           {
             "goos": "linux",
             "goarch": "arm",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal_0.1.13_linux_arm.zip",
-            "sha256": "7b2641e881e71490fa72acb4d71d52c721836b2898cd751b521d3b47e4a644a4",
-            "size": 4675195
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal_0.1.14_linux_arm.zip",
+            "sha256": "bab71c881ec0921289ea3e0941c28bfd015143b371fd67955a1c3bcf27cd4f7c",
+            "size": 4661301
           },
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal_0.1.13_darwin_amd64.zip",
-            "sha256": "c3c5bf2f46669f6bdccd4e7bb182fe1b8d11a9139127ce4b977d8b443a3970a9",
-            "size": 2725837
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal_0.1.14_darwin_amd64.zip",
+            "sha256": "bdb05b19572f446682092357474fe55fafd1f70420f31d7f6d7d011d0db24e67",
+            "size": 2716649
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal_0.1.13_darwin_arm64.zip",
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal_0.1.14_darwin_arm64.zip",
             "sha256": "",
             "size": 0
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal_0.1.13_windows_amd64.zip",
-            "sha256": "f581ca97854afae850bc520e3a41dad5c569016ae95f1d0773a514e1fba77167",
-            "size": 4825839
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal_0.1.14_windows_amd64.zip",
+            "sha256": "7f1c3ed1d1f0c2d9ca841d65c13b934c7f56b4cc5432df9a4ebb4a788636961c",
+            "size": 4809869
           }
         ]
       }
@@ -65,7 +65,7 @@
       "name": "Nous Portal Free",
       "description": "Nous Portal free models plugin for CLIProxyAPI",
       "author": "kepeto",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "repository": "https://github.com/kepeto/cliproxyapi-plugins",
       "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
       "homepage": "https://portal.nousresearch.com",
@@ -77,9 +77,9 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/nous-portal-free_0.1.13_linux_amd64.zip",
-            "sha256": "63384bbfa14fdabf8c506619938bc76ee2086f7de280d9e7d1ee5fb0c1f35f14",
-            "size": 4961407
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/nous-portal-free_0.1.14_linux_amd64.zip",
+            "sha256": "667f4132059f5eefa5eb7e2ca340f0ac41c726825e1527c195d361884164233c",
+            "size": 4947045
           }
         ]
       }
@@ -89,7 +89,7 @@
       "name": "OpenCode Zen Free",
       "description": "OpenCode Zen free models plugin for CLIProxyAPI",
       "author": "kepeto",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "repository": "https://github.com/kepeto/cliproxyapi-plugins",
       "logo": "https://opencode.ai/favicon.ico",
       "homepage": "https://opencode.ai",
@@ -101,9 +101,9 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/opencode-free_0.1.13_linux_amd64.zip",
-            "sha256": "b3677df80cb7692b2071a8f669ecafbefddcaf5a36d69e750414290a7d55c70c",
-            "size": 4928163
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/opencode-free_0.1.14_linux_amd64.zip",
+            "sha256": "983ffafd96362b485f6f7db2a33641d198686e6816e1b10491ca87385e17ed0c",
+            "size": 4912571
           }
         ]
       }
@@ -113,7 +113,7 @@
       "name": "KiloCode Free",
       "description": "KiloCode free models plugin for CLIProxyAPI",
       "author": "kepeto",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "repository": "https://github.com/kepeto/cliproxyapi-plugins",
       "logo": "https://kilo.ai/favicon.ico",
       "homepage": "https://kilo.ai",
@@ -125,9 +125,9 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.13/kilo-free_0.1.13_linux_amd64.zip",
-            "sha256": "4206cc29e4102f04f2bf21ee355c8515700676188021ed1ff12d180f77df832b",
-            "size": 4924940
+            "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/v0.1.14/kilo-free_0.1.14_linux_amd64.zip",
+            "sha256": "c6294a1ca43cc7ff74f4f007d6ea3af7862a9e72e05f017930f0a4a44a13ab16",
+            "size": 4913863
           }
         ]
       }
