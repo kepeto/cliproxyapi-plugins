@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 const (
@@ -30,33 +34,15 @@ type ModelDef struct {
 	ThinkingFormat string `json:"thinkingFormat,omitempty"`
 }
 
-// Known KiloCode free models (from pi-bansos)
-var KNOWN_MODELS = []ModelDef{
-	{ID: "kilo-auto/free", Name: "Kilo Auto Free", Reasoning: false, ContextWindow: 256_000, MaxTokens: 10_000},
-	{ID: "stepfun/step-3.7-flash:free", Name: "Step 3.7 Flash Free", Reasoning: false, ContextWindow: 262_144, MaxTokens: 262_144},
-	{ID: "nvidia/nemotron-3-ultra-550b-a55b:free", Name: "Nemotron 3 Ultra Free", Reasoning: true, ContextWindow: 1_000_000, MaxTokens: 65_536, ThinkingFormat: "openrouter"},
-	{ID: "nvidia/nemotron-3-super-120b-a12b:free", Name: "Nemotron 3 Super Free", Reasoning: true, ContextWindow: 262_144, MaxTokens: 262_144, ThinkingFormat: "openrouter"},
-	{ID: "cohere/north-mini-code:free", Name: "North Mini Code Free", Reasoning: false, ContextWindow: 256_000, MaxTokens: 64_000},
-	{ID: "poolside/laguna-xs-2.1:free", Name: "Laguna XS 2.1 Free", Reasoning: false, ContextWindow: 262_144, MaxTokens: 32_768},
-	{ID: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", Name: "Nemotron 3 Nano Omni Free", Reasoning: true, ContextWindow: 256_000, MaxTokens: 65_536, ThinkingFormat: "openrouter"},
-	{ID: "openrouter/free", Name: "OpenRouter Free (auto)", Reasoning: false, ContextWindow: 200_000, MaxTokens: 65_536},
-	{ID: "nvidia/nemotron-3.5-lightning:free", Name: "Nemotron 3.5 Lightning Free", Reasoning: true, ContextWindow: 1_000_000, MaxTokens: 65_536, ThinkingFormat: "openrouter"},
-	{ID: "nvidia/nemotron-3.5-content-safety:free", Name: "Nemotron 3.5 Content Safety Free", Reasoning: true, ContextWindow: 128_000, MaxTokens: 8_192, ThinkingFormat: "openrouter"},
-	{ID: "tencent/hy3:free", Name: "Tencent Hy3 Free", Reasoning: true, ContextWindow: 262_144, MaxTokens: 128_000, ThinkingFormat: "openrouter"},
-	{ID: "liquid/lfm-2.5-2.6b:free", Name: "Liquid LFM 2.5 2.6B Free", Reasoning: false, ContextWindow: 128_000, MaxTokens: 8_192},
-	{ID: "poolside/laguna-s-2.1:free", Name: "Laguna S 2.1 Free", Reasoning: true, ContextWindow: 262_144, MaxTokens: 32_768, ThinkingFormat: "openrouter"},
-}
-
-var (
-	allModels []ModelDef
-	modelIDs  = make(map[string]bool)
+// kiloRefresher periodically fetches the live model catalog from KiloCode.
+var kiloRefresher = shared.NewModelRefresher(
+	3*time.Hour,
+	fetchKiloCatalog,
+	healthCheckKilo,
 )
 
 func init() {
-	allModels = KNOWN_MODELS
-	for _, m := range allModels {
-		modelIDs[m.ID] = true
-	}
+	kiloRefresher.Start()
 }
 
 func kiloHeaders() map[string]string {
@@ -83,6 +69,37 @@ func randomHex(n int) string {
 }
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
+
+// config holds plugin-level overrides resolved from plugins.configs.kilo-free.
+type config struct {
+	Prefix string `json:"prefix"`
+}
+
+func (c config) prefix() string {
+	if v := trimHTTP(c.Prefix); v != "" {
+		return v
+	}
+	return ""
+}
+
+// resolveConfig decodes the plugin config YAML subtree forwarded by the host.
+func resolveConfig(raw []byte) config {
+	cfg := config{}
+	if len(raw) == 0 {
+		return cfg
+	}
+	// The host may send either a raw object or wrap it; be tolerant.
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		// Try nested under a generic map.
+		var m map[string]json.RawMessage
+		if json.Unmarshal(raw, &m) == nil {
+			if v, ok := m["config"]; ok {
+				_ = json.Unmarshal(v, &cfg)
+			}
+		}
+	}
+	return cfg
+}
 
 func httpDo(req *http.Request) (int, []byte, error) {
 	resp, err := httpClient.Do(req)
@@ -118,4 +135,70 @@ func ioReadAll(r interface {
 		}
 	}
 	return buf, nil
+}
+
+// fetchKiloCatalog retrieves the current free model list from KiloCode.
+func fetchKiloCatalog() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, KILO_MODELS_URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer kilo-free")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("catalog returned %d", resp.StatusCode)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	data, ok := result["data"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no data in catalog")
+	}
+
+	ids := make([]string, 0)
+	for _, item := range data {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, ok := m["id"].(string)
+		if !ok || id == "" {
+			continue
+		}
+		isFree, _ := m["isFree"].(bool)
+		if isFree {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// healthCheckKilo checks if KiloCode /models endpoint is alive
+func healthCheckKilo() bool {
+	req, err := http.NewRequest(http.MethodGet, KILO_MODELS_URL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer kilo-free")
+	req.Header.Set("Accept", "application/json")
+
+	statusCode, _, err := httpDo(req)
+	if err != nil {
+		return false
+	}
+	return statusCode == 200
 }

@@ -9,8 +9,8 @@ Not a fork of CPA — these are out-of-tree provider plugins loaded via CPA's pl
 |--------|----------|------|--------|
 | `nous-portal` | Nous Portal | OAuth device-code | All upstream models |
 | `nous-portal-free` | Nous Portal (free tier) | OAuth device-code | Free models only (`:free` suffix or name contains "free") |
-| `opencode-free` | OpenCode Zen | None (keyless) | Static free model list |
-| `kilo-free` | KiloCode | None (keyless) | Dynamic model catalog from upstream `/models` |
+| `opencode-free` | OpenCode Zen | None (`Bearer public`) | Dynamic free model list from upstream `/models` |
+| `kilo-free` | KiloCode | None (keyless) | Dynamic free model catalog from upstream `/models` |
 
 ## Prerequisites
 
@@ -26,7 +26,7 @@ Not a fork of CPA — these are out-of-tree provider plugins loaded via CPA's pl
 make build
 
 # Or build individually
-cd plugins/nous-portal && CGO_ENABLED=1 go build -buildmode=c-shared -o nous-portal.so .
+cd plugins/opencode-free && CGO_ENABLED=1 go build -buildmode=c-shared -o opencode-free.so .
 ```
 
 Output: `<plugin>.so` in each plugin directory.
@@ -35,7 +35,7 @@ Output: `<plugin>.so` in each plugin directory.
 
 ```bash
 # Copy .so files to CPA plugins dir
-cp plugins/*/*.so ~/cliproxyapi/plugins/
+cp plugins/*/*.so ~/.cli-proxy-api/plugins/
 
 # Or use the deploy target
 make deploy
@@ -77,17 +77,17 @@ plugins:
 ## Restart CPA
 
 ```bash
-systemctl --user restart cliproxyapi.service
+systemctl --user restart cli-proxy-api.service
 ```
 
 ## Verify
 
 ```bash
 # Check logs
-journalctl --user -u cliproxyapi.service -f
+journalctl --user -u cli-proxy-api.service -f
 
 # Verify plugin loaded
-journalctl --user -u cliproxyapi.service | grep "plugin registered"
+journalctl --user -u cli-proxy-api.service | grep "plugin registered"
 
 # Test models endpoint
 curl -s -H "Authorization: Bearer mipu" http://localhost:8317/v1/models | jq '.data[] | .id'
@@ -96,7 +96,7 @@ curl -s -H "Authorization: Bearer mipu" http://localhost:8317/v1/models | jq '.d
 curl -s -X POST http://localhost:8317/v1/chat/completions \
   -H "Authorization: Bearer mipu" \
   -H "Content-Type: application/json" \
-  -d '{"model":"nous-portal-free/minimax/minimax-m2.5:free","messages":[{"role":"user","content":"2*2"}]}'
+  -d '{"model":"opencode-free/deepseek-v4-flash-free","messages":[{"role":"user","content":"2*2"}],"max_tokens":50}'
 ```
 
 ## Plugin ABI Notes
@@ -104,6 +104,12 @@ curl -s -X POST http://localhost:8317/v1/chat/completions \
 - All plugins use `schema_version: 2` in `plugin.register` response.
 - Each plugin exports `cliproxyPluginCall`, `cliproxyPluginFree`, `cliproxyPluginShutdown`.
 - Supported methods: `plugin.register`, `plugin.reconfigure`, `auth.identifier`, `auth.parse`, `auth.login.start`, `auth.login.poll`, `auth.refresh`, `model.static`, `model.for_auth`, `executor.identifier`, `executor.execute`, `executor.execute_stream`, `executor.count_tokens`, `executor.http_request`.
+
+## Dynamic Model Refresh
+
+- `opencode-free` and `kilo-free` fetch live model catalogs from upstream `/models` on a 3-hour interval.
+- `nous-portal-free` refreshes free models from upstream catalog; falls back to a static list if upstream is unreachable.
+- New upstream models are automatically discovered and exposed without plugin updates.
 
 ## License
 

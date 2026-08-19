@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 // fallbackModels is a static, always-available catalog. Mirrors the upstream
@@ -48,7 +50,7 @@ func modelStaticPayload() string {
 	for _, id := range fallbackModels {
 		models = append(models, modelInfo(prefixedModelID(id), id))
 	}
-	return mustJSON(map[string]any{
+	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
 		"Models":   models,
 	})
@@ -67,13 +69,13 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	store := decodeStorage(req.StorageJSON)
 	if !store.valid() {
 		// No usable credential: fall back to static catalog without an auth update.
-		return okEnvelopeJSONStr(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayload())
 	}
 
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
 	if err != nil {
 		// Catalog unavailable: report static list, keep stored catalog if present.
-		return okEnvelopeJSONStr(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayload())
 	}
 
 	models := make([]map[string]any, 0, len(catalog))
@@ -81,7 +83,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
 	}
 	if len(models) == 0 {
-		return okEnvelopeJSONStr(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayload())
 	}
 
 	// Persist catalog into the auth blob for later reuse.
@@ -89,7 +91,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	updated.ModelCatalog, _ = json.Marshal(catalog)
 	auth := buildAuthData(updated, ProviderID, "nous-portal.json", "Nous Portal", nil)
 
-	return okEnvelopeJSON(mustJSON(map[string]any{
+	return shared.OKEnvelope(shared.MustJSON(map[string]any{
 		"Provider":   ProviderID,
 		"Models":     models,
 		"AuthUpdate": auth,
@@ -106,7 +108,7 @@ func fetchModelCatalog(baseURL, apiKey string) ([]rawCatalogModel, error) {
 	if url == "" {
 		url = defaultInferenceBaseURL
 	}
-	url = trimHTTP(url) + "/models"
+	url = shared.TrimHTTP(url) + "/models"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

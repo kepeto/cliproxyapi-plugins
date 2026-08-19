@@ -2,9 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 const (
@@ -29,29 +33,6 @@ type ModelDef struct {
 	ContextWindow int    `json:"contextWindow"`
 	MaxTokens     int    `json:"maxTokens"`
 	ThinkingFormat string `json:"thinkingFormat,omitempty"`
-}
-
-// Known OpenCode free models (from pi-bansos)
-var KNOWN_MODELS = []ModelDef{
-	{ID: "deepseek-v4-flash-free", Name: "DeepSeek V4 Flash", Reasoning: true, ContextWindow: 1_000_000, MaxTokens: 384_000},
-	{ID: "mimo-v2.5-free", Name: "Mimo V2.5 Free", Reasoning: false, ContextWindow: 1_048_576, MaxTokens: 131_072},
-	{ID: "nemotron-3-ultra-free", Name: "Nemotron 3 Ultra", Reasoning: true, ContextWindow: 1_000_000, MaxTokens: 65_536},
-	{ID: "north-mini-code-free", Name: "North Mini Code", Reasoning: true, ContextWindow: 256_000, MaxTokens: 64_000},
-	{ID: "big-pickle", Name: "Big Pickle", Reasoning: true, ContextWindow: 200_000, MaxTokens: 32_000},
-	{ID: "ling-3.0-flash-free", Name: "Ling 3.0 Flash", Reasoning: true, ContextWindow: 262_144, MaxTokens: 32_768},
-	{ID: "laguna-s-2.1-free", Name: "Laguna S 2.1 Free", Reasoning: true, ContextWindow: 262_144, MaxTokens: 32_768},
-}
-
-var (
-	allModels []ModelDef
-	modelIDs  = make(map[string]bool)
-)
-
-func init() {
-	allModels = KNOWN_MODELS
-	for _, m := range allModels {
-		modelIDs[m.ID] = true
-	}
 }
 
 // OpenCode headers (from pi-bansos)
@@ -102,6 +83,106 @@ func httpReadRandom(b []byte) error {
 }
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
+
+// opencodeRefresher periodically fetches the live model catalog from OpenCode.
+var opencodeRefresher = shared.NewModelRefresher(
+	3*time.Hour,
+	fetchOpenCodeModels,
+	healthCheckOpenCode,
+)
+
+func init() {
+	opencodeRefresher.Start()
+}
+
+// fetchOpenCodeModels retrieves the current free model list from OpenCode.
+func fetchOpenCodeModels() ([]string, error) {
+	req, err := http.NewRequest(http.MethodGet, OPENCODE_MODELS_URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = http.Header{}
+	for k, v := range opencodeHeaders() {
+		req.Header.Set(k, v)
+	}
+	statusCode, body, err := httpDo(req)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode != 200 {
+		return nil, fmt.Errorf("opencode models returned %d", statusCode)
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		if m.ID == "" {
+			continue
+		}
+		// Only expose free-tier models; paid models require API key.
+		lower := strings.ToLower(m.ID)
+		if strings.Contains(lower, "-free") || strings.Contains(lower, ":free") {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
+}
+
+// healthCheckOpenCode checks if OpenCode /models endpoint is alive
+func healthCheckOpenCode() bool {
+	req, err := http.NewRequest(http.MethodGet, OPENCODE_MODELS_URL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header = http.Header{}
+	for k, v := range opencodeHeaders() {
+		req.Header.Set(k, v)
+	}
+
+	statusCode, _, err := httpDo(req)
+	if err != nil {
+		return false
+	}
+	return statusCode == 200
+}
+
+// config holds plugin-level overrides resolved from plugins.configs.opencode-free.
+type config struct {
+	Prefix string `json:"prefix"`
+}
+
+func (c config) prefix() string {
+	if v := trimHTTP(c.Prefix); v != "" {
+		return v
+	}
+	return ""
+}
+
+// resolveConfig decodes the plugin config YAML subtree forwarded by the host.
+func resolveConfig(raw []byte) config {
+	cfg := config{}
+	if len(raw) == 0 {
+		return cfg
+	}
+	// The host may send either a raw object or wrap it; be tolerant.
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		// Try nested under a generic map.
+		var m map[string]json.RawMessage
+		if json.Unmarshal(raw, &m) == nil {
+			if v, ok := m["config"]; ok {
+				_ = json.Unmarshal(v, &cfg)
+			}
+		}
+	}
+	return cfg
+}
 
 func httpDo(req *http.Request) (int, []byte, error) {
 	resp, err := httpClient.Do(req)

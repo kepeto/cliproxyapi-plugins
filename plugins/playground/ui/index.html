@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playground</title>
+<link rel="stylesheet" href="/v0/resource/plugins/playground/styles.css">
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">CLIProxyAPI</p>
+      <h1>Playground</h1>
+      <p class="lede">Chat with any model available in your CPA instance. Select an auth and model, then send a message.</p>
+    </div>
+  </header>
+
+  <section class="control-strip">
+    <div class="field" style="grid-column: span 4;">
+      <label>Auth Token</label>
+      <input type="password" id="auth-token" placeholder="Auto-filled from management panel, or paste manually" />
+    </div>
+    <div class="field" style="grid-column: span 4;">
+      <label>Model</label>
+      <select id="model-select"><option value="">Loading...</option></select>
+    </div>
+    <div class="field" style="grid-column: span 4;">
+      <label>Stream</label>
+      <select id="stream-select">
+        <option value="true">Stream</option>
+        <option value="false">Non-stream</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="chat">
+    <div id="chat-history" class="chat-history"></div>
+    <form id="chat-form" class="chat-form">
+      <textarea id="chat-input" rows="3" placeholder="Type a message..."></textarea>
+      <div class="chat-actions">
+        <button type="submit" id="send-button">Send</button>
+        <button type="button" id="clear-button">Clear</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<script src="/v0/resource/plugins/playground/app.js"></script>
+</body>
+</html>

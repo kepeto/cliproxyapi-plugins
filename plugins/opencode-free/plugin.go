@@ -35,24 +35,12 @@ extern void cliproxyPluginShutdown(void);
 import "C"
 
 import (
-	"encoding/json"
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 	"unsafe"
 )
 
 // abiVersion must match pluginabi.ABIVersion (1).
 const abiVersion uint32 = 1
-
-type envelope struct {
-	OK    bool            `json:"ok"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *envelopeError  `json:"error,omitempty"`
-}
-
-type envelopeError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	HTTPStatus int    `json:"http_status,omitempty"`
-}
 
 func main() {}
 
@@ -76,9 +64,9 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	rawResp, err := dispatch(m, rawReq)
 	if err != nil {
 		if de, ok := err.(*dispatchError); ok {
-			rawResp = errorEnvelope(de.Code(), de.Message())
+			rawResp = shared.ErrorEnvelope(de.Code(), de.Message())
 		} else {
-			rawResp = errorEnvelope("dispatch_error", err.Error())
+			rawResp = shared.ErrorEnvelope("dispatch_error", err.Error())
 		}
 	}
 
@@ -107,20 +95,24 @@ func copyCBuffer(ptr *C.uint8_t, length C.size_t) []byte {
 func dispatch(method string, rawReq []byte) ([]byte, error) {
 	switch method {
 	case "plugin.register":
-		return okEnvelopeJSON(registerPayload())
+		return shared.OKEnvelope(registerPayload())
 	case "plugin.reconfigure":
-		return okEnvelopeJSON(registerPayload())
+		if len(rawReq) > 0 {
+			cfg := resolveConfig(rawReq)
+			setPluginPrefix(cfg.prefix())
+		}
+		return shared.OKEnvelope(registerPayload())
 
 	case "auth.identifier":
-		return okEnvelopeJSON(`{"Identifier":"` + PROVIDER_ID + `"}`)
+		return shared.OKEnvelope(`{"Identifier":"` + PROVIDER_ID + `"}`)
 	case "auth.parse":
 		return handleAuthParse(rawReq)
 	case "auth.login.start":
-		return errorEnvelope("login_not_supported", "no login needed for free models"), nil
+		return shared.ErrorEnvelope("login_not_supported", "no login needed for free models"), nil
 	case "auth.login.poll":
-		return errorEnvelope("login_not_supported", "no login needed for free models"), nil
+		return shared.ErrorEnvelope("login_not_supported", "no login needed for free models"), nil
 	case "auth.refresh":
-		return errorEnvelope("refresh_not_supported", "no refresh needed for free models"), nil
+		return shared.ErrorEnvelope("refresh_not_supported", "no refresh needed for free models"), nil
 
 	case "model.static":
 		return handleModelStatic(rawReq)
@@ -160,12 +152,13 @@ func registerPayload() string {
     "Name": "OpenCode Zen Free",
     "Description": "Free models from OpenCode Zen inference API",
     "Version": "0.1.16",
-    "Prefix": "opencode-free",
+    "Prefix": "` + currentPrefix() + `",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
     "Logo": "https://opencode.ai/favicon.ico",
     "ConfigFields": [
-      {"Name": "opencode_base_url", "Type": "string", "Description": "OpenCode Zen base URL (default https://opencode.ai/zen)"}
+      {"Name": "opencode_base_url", "Type": "string", "Description": "OpenCode Zen base URL (default https://opencode.ai/zen)"},
+      {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default opencode-free)"}
     ]
   },
   "capabilities": {
@@ -180,17 +173,15 @@ func registerPayload() string {
 }
 
 func okEnvelopeJSON(result string) ([]byte, error) {
-	return json.Marshal(envelope{OK: true, Result: json.RawMessage(result)})
+	return shared.OKEnvelope(result)
 }
 
 func errorEnvelope(code, message string) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
-	return raw
+	return shared.ErrorEnvelope(code, message)
 }
 
 func errorEnvelopeWithStatus(code, message string, status int) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message, HTTPStatus: status}})
-	return raw
+	return shared.ErrorEnvelopeWithStatus(code, message, status)
 }
 
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {

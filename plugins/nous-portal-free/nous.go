@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 // ProviderID is the canonical provider key. It must match the lowercase identifier
@@ -51,6 +54,7 @@ type loginState struct {
 	clientID         string
 	scope            string
 	createdAt        time.Time
+	accountFileName  string // unique filename for multi-account support
 }
 
 // authStateStore holds in-progress login flows keyed by opaque state token.
@@ -98,12 +102,13 @@ func shutdownLoginPollers() {
 	loginStates.mu.Unlock()
 }
 
-// config holds plugin-level overrides resolved from plugins.configs.nous-portal.
+// config holds plugin-level overrides resolved from plugins.configs.nous-portal-free.
 type config struct {
 	PortalBaseURL    string `json:"portal_base_url"`
 	InferenceBaseURL string `json:"inference_base_url"`
 	ClientID         string `json:"client_id"`
 	Scope            string `json:"scope"`
+	Prefix           string `json:"prefix"`
 }
 
 func (c config) portalBaseURL() string {
@@ -134,6 +139,13 @@ func (c config) scope() string {
 	return defaultScope
 }
 
+func (c config) prefix() string {
+	if v := trimHTTP(c.Prefix); v != "" {
+		return v
+	}
+	return ""
+}
+
 // resolveConfig decodes the plugin config YAML subtree forwarded by the host.
 func resolveConfig(raw []byte) config {
 	cfg := config{}
@@ -153,7 +165,47 @@ func resolveConfig(raw []byte) config {
 	return cfg
 }
 
-// storageJSON is the persisted auth blob stored by the host under the "nous-portal" type.
+// nousRefresher periodically fetches the live model catalog from Nous Portal.
+var nousRefresher = shared.NewModelRefresher(
+	3*time.Hour,
+	fetchNousModels,
+	healthCheckNous,
+)
+
+func init() {
+	nousRefresher.Start()
+}
+
+// fetchNousModels retrieves the current free model list from Nous Portal.
+func fetchNousModels() ([]string, error) {
+	store := storageJSON{
+		InferenceBaseURL: defaultInferenceBaseURL,
+	}
+	catalog, err := fetchModelCatalog(store.InferenceBaseURL, "")
+	if err != nil {
+		return nil, err
+	}
+	free := filterFreeModels(catalog)
+	ids := make([]string, 0, len(free))
+	for _, m := range free {
+		ids = append(ids, m.ID)
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no free models found")
+	}
+	return ids, nil
+}
+
+// healthCheckNous checks if Nous Portal /models endpoint is alive.
+func healthCheckNous() bool {
+	store := storageJSON{
+		InferenceBaseURL: defaultInferenceBaseURL,
+	}
+	_, err := fetchModelCatalog(store.InferenceBaseURL, "")
+	return err == nil
+}
+
+// storageJSON is the persisted auth blob stored by the host under the "nous-portal-free" type.
 type storageJSON struct {
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`
@@ -162,6 +214,7 @@ type storageJSON struct {
 	InferenceBaseURL string    `json:"inference_base_url"`
 	ClientID         string    `json:"client_id"`
 	Scope            string    `json:"scope"`
+	AccountID        string    `json:"account_id,omitempty"`
 	ModelCatalog     []byte    `json:"model_catalog,omitempty"`
 }
 

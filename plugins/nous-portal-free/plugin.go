@@ -57,25 +57,12 @@ static void free_host_buffer(void* ptr, size_t len) {
 import "C"
 
 import (
-	"encoding/json"
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 	"unsafe"
 )
 
 // abiVersion must match pluginabi.ABIVersion (1).
 const abiVersion uint32 = 1
-
-type envelope struct {
-	OK     bool            `json:"ok"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *envelopeError  `json:"error,omitempty"`
-}
-
-type envelopeError struct {
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	Retryable  bool   `json:"retryable,omitempty"`
-	HTTPStatus int    `json:"http_status,omitempty"`
-}
 
 func main() {}
 
@@ -99,13 +86,13 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		response.len = 0
 	}
 	if method == nil {
-		writeResponse(response, errorEnvelope("invalid_method", "method is required"))
+		writeResponse(response, shared.ErrorEnvelope("invalid_method", "method is required"))
 		return 1
 	}
 	rawReq := copyCBuffer(request, requestLen)
 	raw, errHandle := dispatch(C.GoString(method), rawReq)
 	if errHandle != nil {
-		writeResponse(response, errorEnvelope("plugin_error", errHandle.Error()))
+		writeResponse(response, shared.ErrorEnvelope("plugin_error", errHandle.Error()))
 		return 1
 	}
 	writeResponse(response, raw)
@@ -137,12 +124,16 @@ func copyCBuffer(ptr *C.uint8_t, length C.size_t) []byte {
 func dispatch(method string, rawReq []byte) ([]byte, error) {
 	switch method {
 	case "plugin.register":
-		return okEnvelopeJSON(registerPayload())
+		return shared.OKEnvelope(registerPayload())
 	case "plugin.reconfigure":
-		return okEnvelopeJSON(registerPayload())
+		if len(rawReq) > 0 {
+			cfg := resolveConfig(rawReq)
+			setPluginPrefix(cfg.prefix())
+		}
+		return shared.OKEnvelope(registerPayload())
 
 	case "auth.identifier":
-		return okEnvelopeJSON(`{"Identifier":"nous-portal-free"}`)
+		return shared.OKEnvelope(`{"Identifier":"nous-portal-free"}`)
 	case "auth.parse":
 		return handleAuthParse(rawReq)
 	case "auth.login.start":
@@ -153,12 +144,12 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 		return handleAuthRefresh(rawReq)
 
 	case "model.static":
-		return okEnvelopeJSON(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayload())
 	case "model.for_auth":
 		return handleModelForAuth(rawReq)
 
 	case "executor.identifier":
-		return okEnvelopeJSON(`{"Identifier":"nous-portal-free"}`)
+		return shared.OKEnvelope(`{"Identifier":"nous-portal-free"}`)
 	case "executor.execute":
 		return handleExecutorExecute(rawReq)
 	case "executor.execute_stream":
@@ -169,7 +160,7 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 		return handleExecutorHTTPRequest(rawReq)
 
 	default:
-		return errorEnvelope("unknown_method", "unknown method: "+method), nil
+		return shared.ErrorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
 }
 
@@ -180,7 +171,7 @@ func registerPayload() string {
     "Name": "Nous Portal Free",
     "Description": "Free models only from Nous Portal inference API",
     "Version": "0.1.16",
-    "Prefix": "nous-portal-free",
+    "Prefix": "` + currentPrefix() + `",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
     "Logo": "https://hermes-agent.nousresearch.com/favicon.ico",
@@ -192,7 +183,8 @@ func registerPayload() string {
       {"Name": "portal_base_url", "Type": "string", "Description": "Nous Portal OAuth base URL (default https://portal.nousresearch.com)"},
       {"Name": "inference_base_url", "Type": "string", "Description": "OpenAI-compatible inference base URL (default https://inference-api.nousresearch.com/v1)"},
       {"Name": "client_id", "Type": "string", "Description": "OAuth client id (default hermes-cli)"},
-      {"Name": "scope", "Type": "string", "Description": "OAuth scope (default inference:invoke)"}
+      {"Name": "scope", "Type": "string", "Description": "OAuth scope (default inference:invoke)"},
+      {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default nous-portal-free)"}
     ]
   },
   "capabilities": {
@@ -206,23 +198,22 @@ func registerPayload() string {
 }`
 }
 
+// okEnvelopeJSON wraps a JSON string in a success envelope.
 func okEnvelopeJSON(result string) ([]byte, error) {
-	return json.Marshal(envelope{OK: true, Result: json.RawMessage(result)})
+	return shared.OKEnvelope(result)
 }
 
 // okEnvelopeJSONStr wraps a pre-serialized JSON result string into an envelope.
 func okEnvelopeJSONStr(result string) ([]byte, error) {
-	return json.Marshal(envelope{OK: true, Result: json.RawMessage(result)})
+	return shared.OKEnvelope(result)
 }
 
 func errorEnvelope(code, message string) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
-	return raw
+	return shared.ErrorEnvelope(code, message)
 }
 
 func errorEnvelopeWithStatus(code, message string, status int) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message, HTTPStatus: status}})
-	return raw
+	return shared.ErrorEnvelopeWithStatus(code, message, status)
 }
 
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {

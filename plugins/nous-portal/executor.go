@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 var streamTransport = &http.Transport{
@@ -32,13 +34,13 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		return errorEnvelopeWithStatus("auth_required", "nous-portal credential required", 401), nil
 	}
 
-	url := trimHTTP(store.InferenceBaseURL) + "/chat/completions"
+	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
 	body, status, headers, err := doChatRequest(url, store.AccessToken, injectNousPortalTags(stripModelPrefixFromPayload(req.Payload)))
 	if err != nil {
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
 	}
 	if status != 200 {
-		return errorEnvelopeWithStatus("upstream_error", "inference returned "+itoa(status)+": "+string(body), status), nil
+		return errorEnvelopeWithStatus("upstream_error", "inference returned "+shared.Itoa(status)+": "+string(body), status), nil
 	}
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Payload": base64encode(body),
@@ -63,7 +65,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		return errorEnvelopeWithStatus("auth_required", "nous-portal credential required", 401), nil
 	}
 
-	url := trimHTTP(store.InferenceBaseURL) + "/chat/completions"
+	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
 	reader, status, headers, err := doChatStream(url, store.AccessToken, injectNousPortalTags(stripModelPrefixFromPayload(req.Payload)))
 	if err != nil {
 		return errorEnvelope("executor_stream_failed", err.Error()), nil
@@ -72,7 +74,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		buf := new(bytes.Buffer)
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
-		return errorEnvelopeWithStatus("upstream_error", "inference returned "+itoa(status)+": "+buf.String(), status), nil
+		return errorEnvelopeWithStatus("upstream_error", "inference returned "+shared.Itoa(status)+": "+buf.String(), status), nil
 	}
 
 	// Drain the SSE stream and encode each raw chunk as base64 for the host envelope.

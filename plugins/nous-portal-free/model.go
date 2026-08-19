@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"strings"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 // fallbackModels is a static, always-available catalog. Mirrors the upstream
@@ -45,11 +47,15 @@ var fallbackModels = []string{
 }
 
 func modelStaticPayload() string {
-	models := make([]map[string]any, 0, len(fallbackModels))
-	for _, id := range fallbackModels {
+	models := make([]map[string]any, 0)
+	ids := nousRefresher.Models()
+	if len(ids) == 0 {
+		ids = fallbackModels
+	}
+	for _, id := range ids {
 		models = append(models, modelInfo(prefixedModelID(id), id))
 	}
-	return mustJSON(map[string]any{
+	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
 		"Models":   models,
 	})
@@ -67,17 +73,49 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	}
 	store := decodeStorage(req.StorageJSON)
 	if !store.valid() {
-		// No usable credential: fall back to static catalog without an auth update.
-		return okEnvelopeJSONStr(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayload())
 	}
 
+	// Try to refresh from upstream if catalog is stale or missing.
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
 	if err != nil {
-		// Catalog unavailable: report static list, keep stored catalog if present.
-		return okEnvelopeJSONStr(modelStaticPayload())
+		// Fallback to cached or static list.
+		models := make([]map[string]any, 0)
+		ids := nousRefresher.Models()
+		if len(ids) == 0 {
+			ids = fallbackModels
+		}
+		for _, id := range ids {
+			models = append(models, modelInfo(prefixedModelID(id), id))
+		}
+		return shared.OKEnvelope(shared.MustJSON(map[string]any{
+			"Provider": ProviderID,
+			"Models":   models,
+		}))
 	}
 
-	// Filter only free models (id or name contains "free")
+	freeModels := filterFreeModels(catalog)
+	models := make([]map[string]any, 0, len(freeModels))
+	for _, m := range freeModels {
+		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
+	}
+	if len(models) == 0 {
+		return shared.OKEnvelope(modelStaticPayload())
+	}
+
+	// Persist catalog into the auth blob for later reuse.
+	updated := store
+	updated.ModelCatalog, _ = json.Marshal(freeModels)
+	auth := buildAuthData(updated, ProviderID, "nous-portal-free.json", "Nous Portal Free", nil)
+
+	return shared.OKEnvelope(shared.MustJSON(map[string]any{
+		"Provider":   ProviderID,
+		"Models":     models,
+		"AuthUpdate": auth,
+	}))
+}
+
+func filterFreeModels(catalog []rawCatalogModel) []rawCatalogModel {
 	freeModels := make([]rawCatalogModel, 0)
 	for _, m := range catalog {
 		id := strings.ToLower(m.ID)
@@ -86,25 +124,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 			freeModels = append(freeModels, m)
 		}
 	}
-
-	models := make([]map[string]any, 0, len(freeModels))
-	for _, m := range freeModels {
-		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
-	}
-	if len(models) == 0 {
-		return okEnvelopeJSONStr(modelStaticPayload())
-	}
-
-	// Persist catalog into the auth blob for later reuse.
-	updated := store
-	updated.ModelCatalog, _ = json.Marshal(freeModels)
-	auth := buildAuthData(updated, ProviderID, "nous-portal-free.json", "Nous Portal Free", nil)
-
-	return okEnvelopeJSON(mustJSON(map[string]any{
-		"Provider":   ProviderID,
-		"Models":     models,
-		"AuthUpdate": auth,
-	}))
+	return freeModels
 }
 
 type rawCatalogModel struct {
@@ -118,7 +138,7 @@ func fetchModelCatalog(baseURL, apiKey string) ([]rawCatalogModel, error) {
 	if url == "" {
 		url = defaultInferenceBaseURL
 	}
-	url = trimHTTP(url) + "/models"
+	url = shared.TrimHTTP(url) + "/models"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

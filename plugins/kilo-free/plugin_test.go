@@ -1,0 +1,89 @@
+package main
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestRegisterPayload(t *testing.T) {
+	payload := registerPayload()
+	if len(payload) == 0 {
+		t.Fatal("registerPayload() returned empty string")
+	}
+
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(payload), &meta); err != nil {
+		t.Fatalf("registerPayload() returned invalid JSON: %v", err)
+	}
+
+	metadata, ok := meta["metadata"].(map[string]any)
+	if !ok {
+		t.Fatal("registerPayload() missing metadata")
+	}
+
+	name, ok := metadata["Name"].(string)
+	if !ok || name == "" {
+		t.Error("registerPayload() metadata missing Name")
+	}
+
+	prefix, ok := metadata["Prefix"].(string)
+	if !ok || prefix == "" {
+		t.Error("registerPayload() metadata missing Prefix")
+	}
+
+	version, ok := metadata["Version"].(string)
+	if !ok || version == "" {
+		t.Error("registerPayload() metadata missing Version")
+	}
+
+	configFields, ok := metadata["ConfigFields"].([]any)
+	if !ok {
+		t.Error("registerPayload() metadata missing ConfigFields")
+	}
+
+	// Check that prefix config field exists
+	foundPrefix := false
+	for _, cf := range configFields {
+		field, ok := cf.(map[string]any)
+		if !ok {
+			continue
+		}
+		if field["Name"] == "prefix" {
+			foundPrefix = true
+			break
+		}
+	}
+	if !foundPrefix {
+		t.Error("registerPayload() ConfigFields missing prefix field")
+	}
+}
+
+func TestPluginPrefixDefault(t *testing.T) {
+	expected := "kilo-free"
+	if currentPrefix() != expected {
+		t.Errorf("currentPrefix() = %q, want %q", currentPrefix(), expected)
+	}
+}
+
+func TestPluginPrefixOverride(t *testing.T) {
+	orig := currentPrefix()
+	setPluginPrefix("custom-prefix")
+	if currentPrefix() != "custom-prefix" {
+		t.Errorf("currentPrefix() = %q, want %q", currentPrefix(), "custom-prefix")
+	}
+	setPluginPrefix(orig)
+}
+
+func TestPrefixedModelID(t *testing.T) {
+	got := prefixedModelID("tencent/hy3:free")
+	if got != "kilo-free/tencent/hy3:free" {
+		t.Errorf("prefixedModelID() = %q, want %q", got, "kilo-free/tencent/hy3:free")
+	}
+}
+
+func TestStripModelPrefix(t *testing.T) {
+	got := stripModelPrefix("kilo-free/tencent/hy3:free")
+	if got != "tencent/hy3:free" {
+		t.Errorf("stripModelPrefix() = %q, want %q", got, "tencent/hy3:free")
+	}
+}

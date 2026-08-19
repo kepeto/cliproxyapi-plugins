@@ -1,17 +1,38 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// handleAuthParse recognizes nous-portal credential JSON files and returns the auth record.
+// loginCount tracks OAuth logins within this plugin instance for multi-account
+// filename generation. Resets on plugin reload; the user can manually rename
+// files if a stable primary filename is required.
+var loginCount int
+
+// nextAccountFileName returns the next available auth filename for a new
+// nous-portal-free account. The first login in a session writes nous-portal-free.json;
+// subsequent logins write nous-portal-free-2.json, nous-portal-free-3.json, etc.
+// Each file becomes an independent client in CPA with its own OAuth tokens.
+func nextAccountFileName() string {
+	loginCount++
+	if loginCount == 1 {
+		return "nous-portal-free.json"
+	}
+	return fmt.Sprintf("nous-portal-free-%d.json", loginCount)
+}
+
+// handleAuthParse recognizes nous-portal-free credential JSON files and returns the auth record.
+// It only accepts standard storageJSON with "type": "nous-portal-free".
+// Auth files from nous-portal are NOT shared; each plugin maintains separate credentials.
 func handleAuthParse(raw []byte) ([]byte, error) {
 	var probe map[string]any
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		// Not JSON we understand: let another provider handle it.
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
 	typ, _ := probe["type"].(string)
@@ -25,14 +46,24 @@ func handleAuthParse(raw []byte) ([]byte, error) {
 	fileName := "nous-portal-free.json"
 	label := "Nous Portal Free"
 	id := ProviderID
-	if fname, ok := probe["FileName"].(string); ok && strings.TrimSpace(fname) != "" {
+
+	// Prefer explicit AccountID so each credential has a stable unique identity.
+	if store.AccountID != "" {
+		id = store.AccountID
+	} else if fname, ok := probe["FileName"].(string); ok && strings.TrimSpace(fname) != "" {
 		fileName = strings.TrimSpace(fname)
 		stem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
 		if stem != "" && strings.ToLower(stem) != ProviderID {
 			label = label + " (" + stem + ")"
 			id = stem
 		}
+	} else if store.RefreshToken != "" {
+		// Legacy files without AccountID/FileName: derive a deterministic ID
+		// from the refresh token so multiple files don't collapse to one ID.
+		h := sha256.Sum256([]byte(store.RefreshToken))
+		id = ProviderID + "-" + hex.EncodeToString(h[:4])
 	}
+
 	auth := buildAuthDataWithID(store, "nous-portal-free", fileName, label, id, nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Handled": true,
@@ -65,6 +96,7 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 	}
 
 	state := randomState()
+	accountFileName := nextAccountFileName()
 	loginStates.put(state, &loginState{
 		deviceCode:       dc.DeviceCode,
 		verificationURI:  dc.VerificationURIComplete,
@@ -76,6 +108,7 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 		clientID:         cfg.clientID(),
 		scope:            cfg.scope(),
 		createdAt:        time.Now(),
+		accountFileName:  accountFileName,
 	})
 
 	return okEnvelopeJSON(mustJSON(map[string]any{
@@ -149,9 +182,14 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			InferenceBaseURL: inferenceURL,
 			ClientID:         ls.clientID,
 			Scope:            ls.scope,
+			AccountID:        generateAccountID(),
 		}
 		loginStates.delete(req.State)
-		auth := buildAuthData(store, "nous-portal-free", "nous-portal.json", "Nous Portal", nil)
+		fileName := ls.accountFileName
+		if fileName == "" {
+			fileName = "nous-portal-free.json"
+		}
+		auth := buildAuthData(store, "nous-portal-free", fileName, "Nous Portal Free", nil)
 		return okEnvelopeJSON(mustJSON(map[string]any{
 			"Status":  "success",
 			"Message": "Nous Portal login complete",
@@ -252,8 +290,9 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		InferenceBaseURL: inferenceURL,
 		ClientID:         clientID,
 		Scope:            firstNonEmpty(tok.Scope, store.Scope),
+		AccountID:        store.AccountID,
 	}
-	auth := buildAuthData(next, "nous-portal-free", "nous-portal.json", "Nous Portal", nil)
+	auth := buildAuthData(next, "nous-portal-free", "nous-portal-free.json", "Nous Portal Free", nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Auth":             auth,
 		"NextRefreshAfter": next.ExpiresAt.Add(-5 * time.Minute).Format(time.RFC3339),
@@ -342,6 +381,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// generateAccountID creates a short random identifier for a newly authenticated
+// account. Used to keep multiple nous-portal-free credentials distinct in CPA.
+func generateAccountID() string {
+	var buf [4]byte
+	for i := range buf {
+		buf[i] = byte('a' + (time.Now().UnixNano() >> (i * 8) & 0xF))
+	}
+	return ProviderID + "-" + string(buf[:])
 }
 
 func itoa(v int) string {

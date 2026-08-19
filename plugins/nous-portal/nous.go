@@ -51,6 +51,7 @@ type loginState struct {
 	clientID         string
 	scope            string
 	createdAt        time.Time
+	accountFileName  string // unique filename for multi-account support
 }
 
 // authStateStore holds in-progress login flows keyed by opaque state token.
@@ -104,6 +105,7 @@ type config struct {
 	InferenceBaseURL string `json:"inference_base_url"`
 	ClientID         string `json:"client_id"`
 	Scope            string `json:"scope"`
+	Prefix           string `json:"prefix"`
 }
 
 func (c config) portalBaseURL() string {
@@ -134,6 +136,13 @@ func (c config) scope() string {
 	return defaultScope
 }
 
+func (c config) prefix() string {
+	if v := trimHTTP(c.Prefix); v != "" {
+		return v
+	}
+	return ""
+}
+
 // resolveConfig decodes the plugin config YAML subtree forwarded by the host.
 func resolveConfig(raw []byte) config {
 	cfg := config{}
@@ -162,6 +171,7 @@ type storageJSON struct {
 	InferenceBaseURL string    `json:"inference_base_url"`
 	ClientID         string    `json:"client_id"`
 	Scope            string    `json:"scope"`
+	AccountID        string    `json:"account_id,omitempty"`
 	ModelCatalog     []byte    `json:"model_catalog,omitempty"`
 }
 
