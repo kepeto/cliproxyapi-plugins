@@ -170,7 +170,7 @@ func registerPayload() string {
   "metadata": {
     "Name": "Nous Portal Free",
     "Description": "Free models only from Nous Portal inference API",
-    "Version": "0.1.16",
+    "Version": "0.1.17",
     "Prefix": "` + currentPrefix() + `",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
