@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,63 +44,6 @@ func handleExecutorIdentifier() ([]byte, error) {
 	return shared.OKEnvelope(`{"Identifier":"` + EXECUTOR_ID + `"}`)
 }
 
-func convertToOpenAI(req map[string]interface{}, modelID string) map[string]interface{} {
-	// Prefer decoded Payload if present
-	if payload, ok := req["Payload"].(string); ok && payload != "" {
-		decoded, err := base64.StdEncoding.DecodeString(payload)
-		if err == nil {
-			var openaiReq map[string]interface{}
-			if err := json.Unmarshal(decoded, &openaiReq); err == nil {
-				if m, ok := openaiReq["model"].(string); ok {
-					openaiReq["model"] = stripModelPrefix(m)
-				} else {
-					openaiReq["model"] = modelID
-				}
-				return openaiReq
-			}
-		}
-	}
-
-	// Fallback: reconstruct from envelope fields
-	openaiReq := map[string]interface{}{
-		"model":    modelID,
-		"messages": []interface{}{},
-	}
-
-	if messages, ok := req["Messages"].([]interface{}); ok {
-		openaiReq["messages"] = messages
-	} else if messages, ok := req["Messages"].([]map[string]interface{}); ok {
-		openaiReq["messages"] = messages
-	}
-
-	if temp, ok := req["Temperature"].(float64); ok {
-		openaiReq["temperature"] = temp
-	}
-	if maxTokens, ok := req["MaxTokens"].(float64); ok {
-		openaiReq["max_tokens"] = int(maxTokens)
-	}
-	if topP, ok := req["TopP"].(float64); ok {
-		openaiReq["top_p"] = topP
-	}
-	if stop, ok := req["Stop"].([]interface{}); ok {
-		openaiReq["stop"] = stop
-	}
-	if stream, ok := req["Stream"].(bool); ok {
-		openaiReq["stream"] = stream
-	}
-	if seed, ok := req["Seed"].(float64); ok {
-		openaiReq["seed"] = int(seed)
-	}
-	if freqPenalty, ok := req["FrequencyPenalty"].(float64); ok {
-		openaiReq["frequency_penalty"] = freqPenalty
-	}
-	if presPenalty, ok := req["PresencePenalty"].(float64); ok {
-		openaiReq["presence_penalty"] = presPenalty
-	}
-
-	return openaiReq
-}
-
 func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 	var req map[string]interface{}
 	if err := json.Unmarshal(rawReq, &req); err != nil {
@@ -118,7 +60,7 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
 
-	openaiReq := convertToOpenAI(req, baseModelID)
+	openaiReq := shared.ConvertToOpenAI(req, baseModelID, stripModelPrefix)
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil
@@ -153,7 +95,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
 
-	openaiReq := convertToOpenAI(req, baseModelID)
+	openaiReq := shared.ConvertToOpenAI(req, baseModelID, stripModelPrefix)
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil

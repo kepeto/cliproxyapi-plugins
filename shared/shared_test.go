@@ -3,17 +3,16 @@ package shared
 import (
 	"encoding/json"
 	"testing"
-	"time"
 )
 
 func TestPrefix(t *testing.T) {
 	tests := []struct {
-		name      string
-		prefix    string
-		modelID   string
-		expected  string
-		stripIn   string
-		stripOut  string
+		name     string
+		prefix   string
+		modelID  string
+		expected string
+		stripIn  string
+		stripOut string
 	}{
 		{
 			name:     "basic prefix",
@@ -68,9 +67,9 @@ func TestPrefixStripFromPayload(t *testing.T) {
 	p := NewPrefix("nous-portal")
 
 	tests := []struct {
-		name     string
-		payload  []byte
-		modelID  string
+		name    string
+		payload []byte
+		modelID string
 	}{
 		{
 			name:    "strip prefix from model",
@@ -156,48 +155,6 @@ func TestBase64Encode(t *testing.T) {
 	}
 }
 
-func TestBase64Decode(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-		wantErr  bool
-	}{
-		{"", "", false},
-		{"aGVsbG8=", "hello", false},
-		{"!!!invalid!!!", "", true},
-	}
-
-	for _, tt := range tests {
-		got, err := Base64Decode([]byte(tt.input))
-		if (err != nil) != tt.wantErr {
-			t.Errorf("Base64Decode(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
-			continue
-		}
-		if string(got) != tt.expected {
-			t.Errorf("Base64Decode(%q) = %q, want %q", tt.input, string(got), tt.expected)
-		}
-	}
-}
-
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		input    int
-		expected string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{123, "123"},
-		{-456, "-456"},
-	}
-
-	for _, tt := range tests {
-		got := Itoa(tt.input)
-		if got != tt.expected {
-			t.Errorf("Itoa(%d) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
 func TestURLEncode(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -214,35 +171,5 @@ func TestURLEncode(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("URLEncode(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
-	}
-}
-
-func TestFirstNonEmpty(t *testing.T) {
-	tests := []struct {
-		args     []string
-		expected string
-	}{
-		{[]string{"a", "b"}, "a"},
-		{[]string{"", "b"}, "b"},
-		{[]string{"", ""}, ""},
-		{[]string{}, ""},
-	}
-
-	for _, tt := range tests {
-		got := FirstNonEmpty(tt.args...)
-		if got != tt.expected {
-			t.Errorf("FirstNonEmpty(%v) = %q, want %q", tt.args, got, tt.expected)
-		}
-	}
-}
-
-func TestExpiryFromNow(t *testing.T) {
-	got := ExpiryFromNow(3600)
-	if got.IsZero() {
-		t.Error("ExpiryFromNow() returned zero time")
-	}
-	now := time.Now()
-	if got.Before(now) {
-		t.Error("ExpiryFromNow() returned time in the past")
 	}
 }

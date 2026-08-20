@@ -18,8 +18,3 @@ func Base64Encode(b []byte) string {
 	}
 	return base64.StdEncoding.EncodeToString(b)
 }
-
-// Base64Decode decodes standard base64 bytes.
-func Base64Decode(b []byte) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(string(b))
-}

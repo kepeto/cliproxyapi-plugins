@@ -36,3 +36,5 @@ temp/
 *.prof
 *.cov
 coverage.*
+# Local skills (project-specific, not committed)
+skills/

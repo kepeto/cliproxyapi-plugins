@@ -13,14 +13,3 @@ func trimHTTP(v string) string {
 func base64encode(b []byte) string {
 	return shared.Base64Encode(b)
 }
-
-// safeTruncate returns up to n bytes of b as a string, avoiding slice-bounds panics.
-func safeTruncate(b []byte, n int) string {
-	if n <= 0 || len(b) == 0 {
-		return ""
-	}
-	if len(b) <= n {
-		return string(b)
-	}
-	return string(b[:n])
-}

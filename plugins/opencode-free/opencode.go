@@ -12,39 +12,28 @@ import (
 )
 
 const (
-	UPSTREAM_OPENCODE = "https://opencode.ai/zen"
-	OPENCODE_API      = UPSTREAM_OPENCODE + "/v1"
+	UPSTREAM_OPENCODE   = "https://opencode.ai/zen"
+	OPENCODE_API        = UPSTREAM_OPENCODE + "/v1"
 	OPENCODE_MODELS_URL = OPENCODE_API + "/models"
 	OPENCODE_CHAT_URL   = OPENCODE_API + "/chat/completions"
 
-	PROVIDER_ID  = "opencode-free"
-	EXECUTOR_ID  = "opencode-free"
-	PLUGIN_NAME  = "OpenCode Free"
-	PLUGIN_VERSION = "0.1.0"
+	PROVIDER_ID = "opencode-free"
+	EXECUTOR_ID = "opencode-free"
+	PLUGIN_NAME = "OpenCode Free"
 
 	HTTP_TIMEOUT = 30 * time.Second
 )
 
-// ModelDef matches pi-bansos model definitions
-type ModelDef struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Reasoning     bool   `json:"reasoning"`
-	ContextWindow int    `json:"contextWindow"`
-	MaxTokens     int    `json:"maxTokens"`
-	ThinkingFormat string `json:"thinkingFormat,omitempty"`
-}
-
 // OpenCode headers (from pi-bansos)
 func opencodeHeaders() map[string]string {
 	return map[string]string{
-		"User-Agent":           "opencode/latest/1.14.50/cli",
-		"x-opencode-client":    "cli",
-		"x-opencode-project":   "default",
-		"x-opencode-session":   `{"session":"` + randomSessionID() + `"}`,
-		"x-opencode-request":   randomRequestID(),
-		"Accept":               "application/json",
-		"Content-Type":         "application/json",
+		"User-Agent":         "opencode/latest/1.14.50/cli",
+		"x-opencode-client":  "cli",
+		"x-opencode-project": "default",
+		"x-opencode-session": `{"session":"` + randomSessionID() + `"}`,
+		"x-opencode-request": randomRequestID(),
+		"Accept":             "application/json",
+		"Content-Type":       "application/json",
 	}
 }
 
@@ -54,32 +43,11 @@ func mustJSON(v interface{}) string {
 }
 
 func randomSessionID() string {
-	return "cli-" + randomHex(16)
+	return "cli-" + shared.RandomHex(16)
 }
 
 func randomRequestID() string {
-	return randomHex(32)
-}
-
-func randomHex(n int) string {
-	const chars = "0123456789abcdef"
-	b := make([]byte, n)
-	httpReadRandom(b)
-	for i := range b {
-		b[i] = chars[b[i]%16]
-	}
-	return string(b)
-}
-
-func httpReadRandom(b []byte) error {
-	// Simple random using time-based seed
-	// In production, use crypto/rand
-	src := time.Now().UnixNano()
-	for i := range b {
-		src = (src*6364136223846793005 + 1)
-		b[i] = byte(src >> 56)
-	}
-	return nil
+	return shared.RandomHex(32)
 }
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}

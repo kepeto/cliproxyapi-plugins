@@ -186,19 +186,19 @@ func managementRegisterPayload() string {
 }
 
 type managementResponse struct {
-	StatusCode int               `json:"status_code,omitempty"`
+	StatusCode int                 `json:"status_code,omitempty"`
 	Headers    map[string][]string `json:"headers,omitempty"`
-	Body       string            `json:"body,omitempty"`
+	Body       string              `json:"body,omitempty"`
 }
 
 func handleManagementRequest(request *C.uint8_t, requestLen C.size_t) managementResponse {
 	var req struct {
-		Method         string            `json:"Method"`
-		Path           string            `json:"Path"`
-		Query          string            `json:"Query"`
-		Body           []byte            `json:"Body"`
+		Method         string              `json:"Method"`
+		Path           string              `json:"Path"`
+		Query          string              `json:"Query"`
+		Body           []byte              `json:"Body"`
 		Headers        map[string][]string `json:"Headers"`
-		HostCallbackID string            `json:"HostCallbackID"`
+		HostCallbackID string              `json:"HostCallbackID"`
 	}
 	if requestLen > 0 {
 		body := C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
@@ -257,7 +257,9 @@ func handleManagementRequest(request *C.uint8_t, requestLen C.size_t) management
 }
 
 func isBase64(s string) bool {
-	if s == "" { return false }
+	if s == "" {
+		return false
+	}
 	_, err := base64.RawURLEncoding.DecodeString(s)
 	return err == nil
 }
@@ -389,16 +391,16 @@ func callHost(method string, payload []byte) []byte {
 
 func unwrapHTTPResponse(raw []byte) managementResponse {
 	var outer struct {
-		OK    bool             `json:"ok"`
+		OK     bool            `json:"ok"`
 		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &outer); err != nil || !outer.OK {
 		return managementResponse{StatusCode: 500, Body: string(raw)}
 	}
 	var httpResp struct {
-		StatusCode int               `json:"StatusCode"`
+		StatusCode int                 `json:"StatusCode"`
 		Headers    map[string][]string `json:"Headers"`
-		Body       string            `json:"Body"`
+		Body       string              `json:"Body"`
 	}
 	if err := json.Unmarshal(outer.Result, &httpResp); err != nil {
 		return managementResponse{StatusCode: 500, Body: string(outer.Result)}
@@ -440,7 +442,7 @@ func handleListAuths(body []byte) managementResponse {
 		return managementResponse{StatusCode: 500, Body: encodeBase64([]byte(`{"error":"host_error","message":"failed to list auths"}`))}
 	}
 	var outer struct {
-		OK    bool             `json:"ok"`
+		OK     bool            `json:"ok"`
 		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &outer); err != nil || !outer.OK {

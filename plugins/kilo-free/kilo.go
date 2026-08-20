@@ -11,28 +11,15 @@ import (
 )
 
 const (
-	KILO_CHAT_URL    = "https://api.kilo.ai/api/gateway/v1/chat/completions"
-	KILO_MODELS_URL  = "https://api.kilo.ai/api/gateway/models"
-	KILO_API_BASE    = "https://api.kilo.ai/api/gateway"
+	KILO_CHAT_URL   = "https://api.kilo.ai/api/gateway/v1/chat/completions"
+	KILO_MODELS_URL = "https://api.kilo.ai/api/gateway/models"
 
-	PROVIDER_ID      = "kilo-free"
-	EXECUTOR_ID      = "kilo-free"
-	PLUGIN_NAME      = "KiloCode Free"
-	PLUGIN_VERSION   = "0.1.0"
-	KILO_API_KEY     = "kilo-free"
+	PROVIDER_ID = "kilo-free"
+	EXECUTOR_ID = "kilo-free"
+	PLUGIN_NAME = "KiloCode Free"
 
-	HTTP_TIMEOUT     = 30 * time.Second
+	HTTP_TIMEOUT = 30 * time.Second
 )
-
-// ModelDef matches pi-bansos model definitions
-type ModelDef struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Reasoning     bool   `json:"reasoning"`
-	ContextWindow int    `json:"contextWindow"`
-	MaxTokens     int    `json:"maxTokens"`
-	ThinkingFormat string `json:"thinkingFormat,omitempty"`
-}
 
 // kiloRefresher periodically fetches the live model catalog from KiloCode.
 var kiloRefresher = shared.NewModelRefresher(
@@ -47,24 +34,13 @@ func init() {
 
 func kiloHeaders() map[string]string {
 	return map[string]string{
-		"Content-Type":  "application/json",
-		"Accept":        "application/json",
+		"Content-Type": "application/json",
+		"Accept":       "application/json",
 	}
 }
 
 func mustJSON(v interface{}) string {
 	b, _ := json.Marshal(v)
-	return string(b)
-}
-
-func randomHex(n int) string {
-	const chars = "0123456789abcdef"
-	b := make([]byte, n)
-	src := time.Now().UnixNano()
-	for i := range b {
-		src = (src*6364136223846793005 + 1)
-		b[i] = chars[int(src>>56)%16]
-	}
 	return string(b)
 }
 

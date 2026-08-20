@@ -23,7 +23,7 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 			"SupportedGenerationMethods": []string{"chat"},
 			"SupportedInputModalities":   []string{"text"},
 			"SupportedOutputModalities":  []string{"text"},
-			"UserDefined": false,
+			"UserDefined":                false,
 		})
 	}
 
@@ -56,7 +56,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 			"SupportedGenerationMethods": []string{"chat"},
 			"SupportedInputModalities":   []string{"text"},
 			"SupportedOutputModalities":  []string{"text"},
-			"UserDefined": false,
+			"UserDefined":                false,
 		})
 		catalogEntries = append(catalogEntries, map[string]interface{}{
 			"id":   id,
