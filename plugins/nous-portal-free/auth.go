@@ -240,6 +240,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 // handleAuthRefresh rotates the access token using the stored refresh token.
 func handleAuthRefresh(raw []byte) ([]byte, error) {
 	var req struct {
+		AuthID      string `json:"AuthID"`
 		StorageJSON []byte `json:"StorageJSON"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -292,7 +293,17 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		Scope:            firstNonEmpty(tok.Scope, store.Scope),
 		AccountID:        store.AccountID,
 	}
-	auth := buildAuthData(next, "nous-portal-free", "nous-portal-free.json", "Nous Portal Free", nil)
+	id := req.AuthID
+	if id == "" {
+		id = "nous-portal-free"
+		if store.AccountID != "" {
+			id = store.AccountID
+		} else if store.RefreshToken != "" {
+			h := sha256.Sum256([]byte(store.RefreshToken))
+			id = "nous-portal-free-" + hex.EncodeToString(h[:4])
+		}
+	}
+	auth := buildAuthDataWithID(next, "nous-portal-free", "nous-portal-free.json", "Nous Portal Free", id, nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Auth":             auth,
 		"NextRefreshAfter": next.ExpiresAt.Add(-5 * time.Minute).Format(time.RFC3339),
