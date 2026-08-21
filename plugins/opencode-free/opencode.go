@@ -138,11 +138,19 @@ func (c config) prefix() string {
 }
 
 // resolveConfig decodes the plugin config YAML subtree forwarded by the host.
+// applyHostAliases merges dashboard-managed oauth-model-alias entries relayed by
+// the host inside auth.* request payloads. No-op when none are present.
+func applyHostAliases(raw []byte) {
+	if host, ok := shared.HostModelAliases(raw, PROVIDER_ID); ok {
+		modelAliases.SetHost(host)
+	}
+}
+
 // applyConfig applies the host-forwarded config subtree (prefix, aliases).
 func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setPluginPrefix(cfg.prefix())
-	modelAliases.Set(cfg.ModelAliases)
+	modelAliases.SetConfig(cfg.ModelAliases)
 }
 
 func resolveConfig(raw []byte) config {

@@ -1,13 +1,18 @@
 package shared
 
-import "sync"
+import (
+	"sync"
+)
 
-// AliasTable maps client-visible alias model IDs to upstream model IDs, so
-// upstream renames (e.g. ox-alpha -> x-preview-f-free) stay hidden from
-// clients. Configured via plugin config "model_aliases": {alias: upstream}.
+// AliasTable merges model aliases from two sources:
+//   - plugin config (plugins.configs.<id>.model_aliases)
+//   - host oauth-model-alias for this provider, relayed via auth.* requests
+//
+// Effective aliases are the union; on conflict the plugin-config entry wins.
 type AliasTable struct {
-	mu      sync.RWMutex
-	aliases map[string]string // alias -> upstream
+	mu     sync.RWMutex
+	config map[string]string // alias -> upstream
+	host   map[string]string // alias -> upstream
 }
 
 // NewAliasTable creates an empty AliasTable.
@@ -15,17 +20,28 @@ func NewAliasTable() *AliasTable {
 	return &AliasTable{}
 }
 
-// Set replaces the alias map. Empty entries and self-mappings are dropped.
-func (a *AliasTable) Set(aliases map[string]string) {
-	clean := make(map[string]string, len(aliases))
-	for alias, upstream := range aliases {
+func cleanAliases(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for alias, upstream := range in {
 		if alias == "" || upstream == "" || alias == upstream {
 			continue
 		}
-		clean[alias] = upstream
+		out[alias] = upstream
 	}
+	return out
+}
+
+// SetConfig replaces the plugin-config alias source.
+func (a *AliasTable) SetConfig(aliases map[string]string) {
 	a.mu.Lock()
-	a.aliases = clean
+	a.config = cleanAliases(aliases)
+	a.mu.Unlock()
+}
+
+// SetHost replaces the host-relayed (dashboard oauth-model-alias) source.
+func (a *AliasTable) SetHost(aliases map[string]string) {
+	a.mu.Lock()
+	a.host = cleanAliases(aliases)
 	a.mu.Unlock()
 }
 
@@ -34,18 +50,24 @@ func (a *AliasTable) Set(aliases map[string]string) {
 func (a *AliasTable) Resolve(modelID string) string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if up, ok := a.aliases[modelID]; ok {
+	if up, ok := a.config[modelID]; ok {
+		return up
+	}
+	if up, ok := a.host[modelID]; ok {
 		return up
 	}
 	return modelID
 }
 
-// Entries returns a copy of the current alias -> upstream map.
+// Entries returns the effective alias -> upstream map (config wins on conflict).
 func (a *AliasTable) Entries() map[string]string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	out := make(map[string]string, len(a.aliases))
-	for k, v := range a.aliases {
+	out := make(map[string]string, len(a.config)+len(a.host))
+	for k, v := range a.host {
+		out[k] = v
+	}
+	for k, v := range a.config {
 		out[k] = v
 	}
 	return out

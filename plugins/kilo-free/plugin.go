@@ -98,6 +98,7 @@ func copyCBuffer(ptr *C.uint8_t, length C.size_t) []byte {
 }
 
 func dispatch(method string, rawReq []byte) ([]byte, error) {
+	applyHostAliases(rawReq)
 	switch method {
 	case "plugin.register":
 		applyConfig(rawReq)
