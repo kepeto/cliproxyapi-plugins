@@ -57,9 +57,14 @@ static void free_host_buffer(void* ptr, size_t len) {
 import "C"
 
 import (
+	"fmt"
+
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 	"unsafe"
 )
+
+// pluginVersion is injected at build time via -ldflags.
+var pluginVersion = "dev"
 
 // abiVersion must match pluginabi.ABIVersion (1).
 const abiVersion uint32 = 1
@@ -165,13 +170,13 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 }
 
 func registerPayload() string {
-	return `{
+	return fmt.Sprintf(`{
   "schema_version": 2,
   "metadata": {
     "Name": "Nous Portal",
     "Description": "OAuth device-code authentication for Nous Portal inference API",
-    "Version": "0.1.19",
-    "Prefix": "` + currentPrefix() + `",
+    "Version": "%s",
+    "Prefix": "%s",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
     "Logo": "https://hermes-agent.nousresearch.com/favicon.ico",
@@ -195,7 +200,7 @@ func registerPayload() string {
     "executor_input_formats": ["chat-completions"],
     "executor_output_formats": ["chat-completions"]
   }
-}`
+}`, pluginVersion, currentPrefix())
 }
 
 // okEnvelopeJSON wraps a JSON string in a success envelope.

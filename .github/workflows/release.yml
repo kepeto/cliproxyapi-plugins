@@ -367,7 +367,7 @@ jobs:
           mkdir -p "$archive_dir"
 
           cd "$workspace/${PLUGIN_DIR}"
-          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -buildmode=c-shared -o "$archive_dir/${BINARY_NAME}${ext}" .
+          CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -ldflags "-X main.pluginVersion=${RELEASE_VERSION}" -buildmode=c-shared -o "$archive_dir/${BINARY_NAME}${ext}" .
 
           cd "$workspace"
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then

@@ -35,9 +35,14 @@ extern void cliproxyPluginShutdown(void);
 import "C"
 
 import (
+	"fmt"
+
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 	"unsafe"
 )
+
+// pluginVersion is injected at build time via -ldflags.
+var pluginVersion = "dev"
 
 // abiVersion must match pluginabi.ABIVersion (1).
 const abiVersion uint32 = 1
@@ -146,13 +151,13 @@ func (e *dispatchError) Code() string    { return e.code }
 func (e *dispatchError) Message() string { return e.message }
 
 func registerPayload() string {
-	return `{
+	return fmt.Sprintf(`{
   "schema_version": 2,
   "metadata": {
     "Name": "OpenCode Zen Free",
     "Description": "Free models from OpenCode Zen inference API",
-    "Version": "0.1.19",
-    "Prefix": "` + currentPrefix() + `",
+    "Version": "%s",
+    "Prefix": "%s",
     "Author": "kepeto",
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
     "Logo": "https://opencode.ai/favicon.ico",
@@ -169,7 +174,7 @@ func registerPayload() string {
     "executor_input_formats": ["chat-completions"],
     "executor_output_formats": ["chat-completions"]
   }
-}`
+}`, pluginVersion, currentPrefix())
 }
 
 func okEnvelopeJSON(result string) ([]byte, error) {
