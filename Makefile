@@ -34,6 +34,7 @@ clean:
 	rm -rf $(DIST)
 
 # Install location of the CPA host; overridable for tests.
+CPA_CONFIG ?= $(HOME)/.cli-proxy-api/config.yaml
 PLUGIN_DIR ?= $(HOME)/.cli-proxy-api/plugins/linux/amd64
 DEPLOY_VERSION ?= $(shell git describe --tags --match 'v*' --abbrev=0 2>/dev/null | sed 's/^v//' || echo dev)
 
@@ -44,7 +45,9 @@ deploy:
 	@$(MAKE) --no-print-directory VERSION=$(DEPLOY_VERSION) build
 	@for plugin in $(PLUGINS); do \
 		cp plugins/$$plugin/$$plugin.so $(PLUGIN_DIR)/$$plugin-v$(DEPLOY_VERSION).so || exit 1; \
+		find $(PLUGIN_DIR) -name "$$plugin-v*.so" ! -name "$$plugin-v$(DEPLOY_VERSION).so" -delete; \
 	done
+	@python3 scripts/sync_store_versions.py $(CPA_CONFIG) $(DEPLOY_VERSION) $(PLUGINS)
 	@$(MAKE) --no-print-directory DEPLOY_VERSION=$(DEPLOY_VERSION) verify-deploy
 # Fails loudly if any installed .so does not embed its own filename version.
 verify-deploy:
