@@ -8,7 +8,12 @@ import (
 )
 
 func handleModelStatic(rawReq []byte) ([]byte, error) {
-	_ = rawReq
+	if err := keylessAuth.Ensure(rawReq); err != nil {
+		return errorEnvelope("auth_bootstrap_failed", err.Error()), nil
+	}
+	if err := kiloRefresher.RefreshIfEmpty(); err != nil && len(kiloRefresher.Models()) == 0 {
+		return errorEnvelope("model_refresh_failed", err.Error()), nil
+	}
 
 	models := make([]map[string]interface{}, 0)
 	for _, id := range kiloRefresher.Models() {

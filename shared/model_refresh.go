@@ -8,6 +8,7 @@ import (
 // ModelRefresher periodically refreshes a model list from upstream.
 type ModelRefresher struct {
 	mu          sync.RWMutex
+	refreshMu   sync.Mutex
 	models      []string
 	lastRefresh time.Time
 	interval    time.Duration
@@ -55,6 +56,25 @@ func (r *ModelRefresher) Stop() {
 
 // Refresh performs a single catalog fetch and updates the model list.
 func (r *ModelRefresher) Refresh() error {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	return r.refresh()
+}
+
+// RefreshIfEmpty waits for any in-flight refresh and fetches only when no catalog is available.
+func (r *ModelRefresher) RefreshIfEmpty() error {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	r.mu.RLock()
+	empty := len(r.models) == 0
+	r.mu.RUnlock()
+	if !empty {
+		return nil
+	}
+	return r.refresh()
+}
+
+func (r *ModelRefresher) refresh() error {
 	if r.fetch == nil {
 		return nil
 	}

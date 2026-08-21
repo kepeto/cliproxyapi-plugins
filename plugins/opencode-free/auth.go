@@ -1,46 +1,34 @@
 package main
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "github.com/kepeto/cliproxyapi-plugins/shared"
 
-// handleAuthParse recognizes opencode-free credential JSON files and returns the auth record.
+var keylessAuth = shared.KeylessAuth{
+	Provider: PROVIDER_ID,
+	Label:    "OpenCode Zen Free",
+	Token:    "public",
+	LoginURL: "https://opencode.ai/",
+}
+
 func handleAuthParse(raw []byte) ([]byte, error) {
-	var probe map[string]any
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return okEnvelopeJSON(`{"Handled":false}`)
-	}
-	typ, _ := probe["type"].(string)
-	if strings.ToLower(strings.TrimSpace(typ)) != PROVIDER_ID {
-		return okEnvelopeJSON(`{"Handled":false}`)
-	}
+	return shared.OKEnvelope(keylessAuth.Parse(raw))
+}
 
-	metadata := map[string]any{
-		"type":     PROVIDER_ID,
-		"username": PROVIDER_ID,
+func handleAuthLoginStart(raw []byte) ([]byte, error) {
+	result, err := keylessAuth.StartLogin(raw)
+	if err != nil {
+		return shared.ErrorEnvelope("auth_bootstrap_failed", err.Error()), nil
 	}
-	if v, ok := probe["access_token"].(string); ok && strings.TrimSpace(v) != "" {
-		metadata["access_token"] = strings.TrimSpace(v)
-	}
-	if v, ok := probe["refresh_token"].(string); ok && strings.TrimSpace(v) != "" {
-		metadata["refresh_token"] = strings.TrimSpace(v)
-	}
+	return shared.OKEnvelope(result)
+}
 
-	auth := map[string]any{
-		"Provider":    PROVIDER_ID,
-		"ID":          PROVIDER_ID,
-		"FileName":    PROVIDER_ID + ".json",
-		"Label":       "OpenCode Zen Free",
-		"StorageJSON": raw,
-		"Metadata":    metadata,
-		"Attributes": map[string]string{
-			"source":   "plugin:" + PROVIDER_ID,
-			"provider": PROVIDER_ID,
-		},
+func handleAuthLoginPoll(raw []byte) ([]byte, error) {
+	result, err := keylessAuth.PollLogin(raw)
+	if err != nil {
+		return shared.ErrorEnvelope("auth_bootstrap_failed", err.Error()), nil
 	}
-	return okEnvelopeJSON(mustJSON(map[string]any{
-		"Handled": true,
-		"Auth":    auth,
-	}))
+	return shared.OKEnvelope(result)
+}
+
+func handleAuthRefresh(raw []byte) ([]byte, error) {
+	return shared.OKEnvelope(keylessAuth.Refresh(raw))
 }

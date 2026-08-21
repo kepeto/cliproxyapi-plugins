@@ -108,11 +108,11 @@ func dispatch(method string, rawReq []byte) ([]byte, error) {
 	case "auth.parse":
 		return handleAuthParse(rawReq)
 	case "auth.login.start":
-		return shared.ErrorEnvelope("login_not_supported", "no login needed for free models"), nil
+		return handleAuthLoginStart(rawReq)
 	case "auth.login.poll":
-		return shared.ErrorEnvelope("login_not_supported", "no login needed for free models"), nil
+		return handleAuthLoginPoll(rawReq)
 	case "auth.refresh":
-		return shared.ErrorEnvelope("refresh_not_supported", "no refresh needed for free models"), nil
+		return handleAuthRefresh(rawReq)
 
 	case "model.static":
 		return handleModelStatic(rawReq)
