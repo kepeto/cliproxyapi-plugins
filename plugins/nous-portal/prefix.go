@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
@@ -21,10 +23,31 @@ func stripModelPrefix(modelID string) string {
 	return pluginPrefix.Strip(modelID)
 }
 
-// stripModelPrefixFromPayload rewrites the "model" field inside an OpenAI-style JSON
-// payload, removing this prefix so the upstream receives the bare id.
-func stripModelPrefixFromPayload(payload []byte) []byte {
-	return pluginPrefix.StripFromPayload(payload)
+// resolveModel strips the plugin prefix, then maps any configured alias to its
+// upstream model ID.
+func resolveModel(modelID string) string {
+	return modelAliases.Resolve(stripModelPrefix(modelID))
+}
+
+// resolveModelFromPayload rewrites the "model" field inside an OpenAI-style JSON
+// payload so the upstream receives the bare, alias-resolved id.
+func resolveModelFromPayload(payload []byte) []byte {
+	if len(payload) == 0 {
+		return payload
+	}
+	var root map[string]any
+	if err := json.Unmarshal(payload, &root); err != nil {
+		return payload
+	}
+	if m, ok := root["model"].(string); ok && m != "" {
+		if resolved := resolveModel(m); resolved != m {
+			root["model"] = resolved
+			if out, err := json.Marshal(root); err == nil {
+				return out
+			}
+		}
+	}
+	return payload
 }
 
 // setPluginPrefix updates the runtime prefix from plugin config.

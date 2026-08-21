@@ -55,6 +55,9 @@ func modelStaticPayload() string {
 	for _, id := range ids {
 		models = append(models, modelInfo(prefixedModelID(id), id))
 	}
+	for alias := range modelAliases.Entries() {
+		models = append(models, modelInfo(prefixedModelID(alias), alias))
+	}
 	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
 		"Models":   models,
@@ -98,6 +101,9 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	models := make([]map[string]any, 0, len(freeModels))
 	for _, m := range freeModels {
 		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
+	}
+	for alias := range modelAliases.Entries() {
+		models = append(models, modelInfo(prefixedModelID(alias), alias))
 	}
 	if len(models) == 0 {
 		return shared.OKEnvelope(modelStaticPayload())

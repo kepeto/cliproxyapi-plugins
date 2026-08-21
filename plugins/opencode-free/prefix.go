@@ -21,10 +21,10 @@ func stripModelPrefix(modelID string) string {
 	return pluginPrefix.Strip(modelID)
 }
 
-// stripModelPrefixFromPayload rewrites the "model" field inside an OpenAI-style JSON
-// payload, removing this prefix so the upstream receives the bare id.
-func stripModelPrefixFromPayload(payload []byte) []byte {
-	return pluginPrefix.StripFromPayload(payload)
+// resolveModel strips the plugin prefix, then maps any configured alias to its
+// upstream model ID.
+func resolveModel(modelID string) string {
+	return modelAliases.Resolve(stripModelPrefix(modelID))
 }
 
 // setPluginPrefix updates the runtime prefix from plugin config.

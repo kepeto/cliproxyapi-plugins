@@ -100,12 +100,10 @@ func copyCBuffer(ptr *C.uint8_t, length C.size_t) []byte {
 func dispatch(method string, rawReq []byte) ([]byte, error) {
 	switch method {
 	case "plugin.register":
+		applyConfig(rawReq)
 		return shared.OKEnvelope(registerPayload())
 	case "plugin.reconfigure":
-		if len(rawReq) > 0 {
-			cfg := resolveConfig(rawReq)
-			setPluginPrefix(cfg.prefix())
-		}
+		applyConfig(rawReq)
 		return shared.OKEnvelope(registerPayload())
 
 	case "auth.identifier":

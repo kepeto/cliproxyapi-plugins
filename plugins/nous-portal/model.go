@@ -48,7 +48,10 @@ var fallbackModels = []string{
 func modelStaticPayload() string {
 	models := make([]map[string]any, 0, len(fallbackModels))
 	for _, id := range fallbackModels {
-		models = append(models, modelInfo(prefixedModelID(id), id))
+		models = append(models, modelEntry(id))
+	}
+	for alias := range modelAliases.Entries() {
+		models = append(models, modelEntry(alias))
 	}
 	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
@@ -80,7 +83,10 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 
 	models := make([]map[string]any, 0, len(catalog))
 	for _, m := range catalog {
-		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
+		models = append(models, modelEntry(m.ID))
+	}
+	for alias := range modelAliases.Entries() {
+		models = append(models, modelEntry(alias))
 	}
 	if len(models) == 0 {
 		return shared.OKEnvelope(modelStaticPayload())
@@ -147,14 +153,15 @@ func fetchModelCatalog(baseURL, apiKey string) ([]rawCatalogModel, error) {
 	return payload.Data, nil
 }
 
-func modelInfo(id, name string) map[string]any {
+// modelEntry builds one catalog entry for a model ID (upstream or alias).
+func modelEntry(id string) map[string]any {
 	return map[string]any{
-		"ID":                         id,
+		"ID":                         prefixedModelID(id),
 		"Object":                     "model",
 		"OwnedBy":                    ProviderID,
 		"Type":                       ProviderID,
-		"DisplayName":                name,
-		"Name":                       name,
+		"DisplayName":                id,
+		"Name":                       id,
 		"ContextLength":              128000,
 		"MaxCompletionTokens":        4096,
 		"SupportedGenerationMethods": []string{"chat"},

@@ -28,6 +28,9 @@ var kiloRefresher = shared.NewModelRefresher(
 	healthCheckKilo,
 )
 
+// modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
+var modelAliases = shared.NewAliasTable()
+
 func init() {
 	kiloRefresher.Start()
 }
@@ -48,7 +51,8 @@ var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
 
 // config holds plugin-level overrides resolved from plugins.configs.kilo-free.
 type config struct {
-	Prefix string `json:"prefix"`
+	Prefix       string            `json:"prefix"`
+	ModelAliases map[string]string `json:"model_aliases"`
 }
 
 func (c config) prefix() string {
@@ -59,21 +63,17 @@ func (c config) prefix() string {
 }
 
 // resolveConfig decodes the plugin config YAML subtree forwarded by the host.
+// applyConfig applies the host-forwarded config subtree (prefix, aliases).
+func applyConfig(raw []byte) {
+	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
+	setPluginPrefix(cfg.prefix())
+	modelAliases.Set(cfg.ModelAliases)
+}
+
 func resolveConfig(raw []byte) config {
 	cfg := config{}
-	if len(raw) == 0 {
-		return cfg
-	}
-	// The host may send either a raw object or wrap it; be tolerant.
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		// Try nested under a generic map.
-		var m map[string]json.RawMessage
-		if json.Unmarshal(raw, &m) == nil {
-			if v, ok := m["config"]; ok {
-				_ = json.Unmarshal(v, &cfg)
-			}
-		}
-	}
+	// Host forwards the config subtree as YAML bytes; tolerate raw JSON too.
+	_ = shared.UnmarshalConfig(raw, &cfg)
 	return cfg
 }
 

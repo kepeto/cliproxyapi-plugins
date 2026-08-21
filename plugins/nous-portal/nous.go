@@ -1,9 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 // ProviderID is the canonical provider key. It must match the lowercase identifier
@@ -99,13 +100,17 @@ func shutdownLoginPollers() {
 	loginStates.mu.Unlock()
 }
 
+// modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
+var modelAliases = shared.NewAliasTable()
+
 // config holds plugin-level overrides resolved from plugins.configs.nous-portal.
 type config struct {
-	PortalBaseURL    string `json:"portal_base_url"`
-	InferenceBaseURL string `json:"inference_base_url"`
-	ClientID         string `json:"client_id"`
-	Scope            string `json:"scope"`
-	Prefix           string `json:"prefix"`
+	PortalBaseURL    string            `json:"portal_base_url"`
+	InferenceBaseURL string            `json:"inference_base_url"`
+	ClientID         string            `json:"client_id"`
+	Scope            string            `json:"scope"`
+	Prefix           string            `json:"prefix"`
+	ModelAliases     map[string]string `json:"model_aliases"`
 }
 
 func (c config) portalBaseURL() string {
@@ -144,21 +149,17 @@ func (c config) prefix() string {
 }
 
 // resolveConfig decodes the plugin config YAML subtree forwarded by the host.
+// applyConfig applies the host-forwarded config subtree (prefix, aliases).
+func applyConfig(raw []byte) {
+	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
+	setPluginPrefix(cfg.prefix())
+	modelAliases.Set(cfg.ModelAliases)
+}
+
 func resolveConfig(raw []byte) config {
 	cfg := config{}
-	if len(raw) == 0 {
-		return cfg
-	}
-	// The host may send either a raw object or wrap it; be tolerant.
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		// Try nested under a generic map.
-		var m map[string]json.RawMessage
-		if json.Unmarshal(raw, &m) == nil {
-			if v, ok := m["config"]; ok {
-				_ = json.Unmarshal(v, &cfg)
-			}
-		}
-	}
+	// Host forwards the config subtree as YAML bytes; tolerate raw JSON too.
+	_ = shared.UnmarshalConfig(raw, &cfg)
 	return cfg
 }
 

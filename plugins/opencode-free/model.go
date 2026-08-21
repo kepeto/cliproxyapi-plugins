@@ -17,27 +17,35 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	}
 	models := make([]map[string]interface{}, 0)
 	for _, id := range opencodeRefresher.Models() {
-		models = append(models, map[string]interface{}{
-			"ID":                         prefixedModelID(id),
-			"Object":                     "model",
-			"Created":                    0,
-			"OwnedBy":                    "opencode-free",
-			"Type":                       PROVIDER_ID,
-			"DisplayName":                id,
-			"Name":                       id,
-			"ContextLength":              128000,
-			"MaxCompletionTokens":        4096,
-			"SupportedGenerationMethods": []string{"chat"},
-			"SupportedInputModalities":   []string{"text"},
-			"SupportedOutputModalities":  []string{"text"},
-			"UserDefined":                false,
-		})
+		models = append(models, modelEntry(id))
+	}
+	for alias := range modelAliases.Entries() {
+		models = append(models, modelEntry(alias))
 	}
 
 	return shared.OKEnvelope(shared.MustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
 		"Models":   models,
 	}))
+}
+
+// modelEntry builds one catalog entry for a model ID (upstream or alias).
+func modelEntry(id string) map[string]interface{} {
+	return map[string]interface{}{
+		"ID":                         prefixedModelID(id),
+		"Object":                     "model",
+		"Created":                    0,
+		"OwnedBy":                    "opencode-free",
+		"Type":                       PROVIDER_ID,
+		"DisplayName":                id,
+		"Name":                       id,
+		"ContextLength":              128000,
+		"MaxCompletionTokens":        4096,
+		"SupportedGenerationMethods": []string{"chat"},
+		"SupportedInputModalities":   []string{"text"},
+		"SupportedOutputModalities":  []string{"text"},
+		"UserDefined":                false,
+	}
 }
 
 func handleModelForAuth(rawReq []byte) ([]byte, error) {
@@ -55,27 +63,14 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	models := make([]map[string]interface{}, 0)
 	catalogEntries := make([]map[string]interface{}, 0)
 	for _, id := range opencodeRefresher.Models() {
-		if alive || opencodeRefresher.Models() != nil {
-			models = append(models, map[string]interface{}{
-				"ID":                         prefixedModelID(id),
-				"Object":                     "model",
-				"Created":                    0,
-				"OwnedBy":                    "opencode-free",
-				"Type":                       PROVIDER_ID,
-				"DisplayName":                id,
-				"Name":                       id,
-				"ContextLength":              128000,
-				"MaxCompletionTokens":        4096,
-				"SupportedGenerationMethods": []string{"chat"},
-				"SupportedInputModalities":   []string{"text"},
-				"SupportedOutputModalities":  []string{"text"},
-				"UserDefined":                false,
-			})
-			catalogEntries = append(catalogEntries, map[string]interface{}{
-				"id":   id,
-				"name": id,
-			})
-		}
+		models = append(models, modelEntry(id))
+		catalogEntries = append(catalogEntries, map[string]interface{}{
+			"id":   id,
+			"name": id,
+		})
+	}
+	for alias := range modelAliases.Entries() {
+		models = append(models, modelEntry(alias))
 	}
 
 	catalogJSON, _ := json.Marshal(catalogEntries)

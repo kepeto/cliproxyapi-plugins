@@ -55,12 +55,12 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("invalid_request", "missing model"), nil
 	}
 
-	baseModelID := stripModelPrefix(modelID)
+	baseModelID := resolveModel(modelID)
 	if baseModelID != "" && !kiloRefresher.Contains(baseModelID) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
 
-	openaiReq := shared.ConvertToOpenAI(req, baseModelID, stripModelPrefix)
+	openaiReq := shared.ConvertToOpenAI(req, baseModelID, resolveModel)
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil
@@ -90,12 +90,12 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	if modelID == "" {
 		return errorEnvelope("invalid_request", "missing model"), nil
 	}
-	baseModelID := stripModelPrefix(modelID)
+	baseModelID := resolveModel(modelID)
 	if baseModelID != "" && !kiloRefresher.Contains(baseModelID) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
 
-	openaiReq := shared.ConvertToOpenAI(req, baseModelID, stripModelPrefix)
+	openaiReq := shared.ConvertToOpenAI(req, baseModelID, resolveModel)
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil

@@ -43,7 +43,14 @@ plugins:
       enabled: true
       priority: 1
       opencode_base_url: "https://opencode.ai/zen"
+      # Optional: client-visible alias -> upstream model ID.
+      model_aliases:
+        ox-alpha: "x-preview-f-free"
 ```
+
+Aliases appear in `/v1/models` alongside the live catalog; requests to an
+alias are routed to its upstream model. Applied on hot reload via
+`plugin.reconfigure` — no restart needed.
 
 ## Upstream Endpoint
 

@@ -32,7 +32,7 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
-	body, status, headers, err := shared.DoChatRequest(url, store.AccessToken, shared.InjectNousPortalTags(stripModelPrefixFromPayload(req.Payload)))
+	body, status, headers, err := shared.DoChatRequest(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
 	if err != nil {
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
 	}
@@ -63,7 +63,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
-	reader, status, headers, err := shared.DoChatStream(url, store.AccessToken, shared.InjectNousPortalTags(stripModelPrefixFromPayload(req.Payload)))
+	reader, status, headers, err := shared.DoChatStream(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
 	if err != nil {
 		return errorEnvelope("executor_stream_failed", err.Error()), nil
 	}

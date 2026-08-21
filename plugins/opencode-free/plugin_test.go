@@ -87,3 +87,10 @@ func TestStripModelPrefix(t *testing.T) {
 		t.Errorf("stripModelPrefix() = %q, want %q", got, "deepseek-v4-flash-free")
 	}
 }
+
+func TestResolveConfigYAML(t *testing.T) {
+	cfg := resolveConfig([]byte("enabled: true\nmodel_aliases:\n    ox-alpha: x-preview-f-free\n"))
+	if cfg.ModelAliases["ox-alpha"] != "x-preview-f-free" {
+		t.Fatalf("model_aliases not parsed from YAML: %v", cfg.ModelAliases)
+	}
+}
