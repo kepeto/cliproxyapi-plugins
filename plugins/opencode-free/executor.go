@@ -32,10 +32,16 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 	if modelID == "" {
 		return errorEnvelope("invalid_request", "missing model"), nil
 	}
+	if err := ensureModels(); err != nil {
+		return errorEnvelope("model_refresh_failed", err.Error()), nil
+	}
 
 	baseModelID := resolveModel(modelID)
 	if baseModelID != "" && !opencodeRefresher.Contains(baseModelID) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
+	}
+	if !modelHealth.Allow(openCodeHealthScope(), baseModelID) {
+		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
 	}
 
 	openaiReq := shared.ConvertToOpenAI(req, baseModelID, resolveModel)
@@ -46,12 +52,23 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 
 	status, body, err := executeOpenCodeChatWithRetry(payload, false)
 	if err != nil {
+		if shared.IsModelSpecificFailure(status, body, err) {
+			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		}
 		return errorEnvelope("upstream_error", err.Error()), nil
 	}
 
 	if status < 200 || status >= 300 {
+		if shared.IsModelSpecificFailure(status, body, nil) {
+			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		}
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
+	if !shared.ValidChatResponse(body) {
+		modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		return errorEnvelope("upstream_error", "invalid or empty chat response"), nil
+	}
+	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]interface{}{
 		"Payload": base64encode(body),
 		"Headers": map[string][]string{
@@ -70,10 +87,16 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	if modelID == "" {
 		return errorEnvelope("invalid_request", "missing model"), nil
 	}
+	if err := ensureModels(); err != nil {
+		return errorEnvelope("model_refresh_failed", err.Error()), nil
+	}
 
 	baseModelID := resolveModel(modelID)
 	if baseModelID != "" && !opencodeRefresher.Contains(baseModelID) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
+	}
+	if !modelHealth.Allow(openCodeHealthScope(), baseModelID) {
+		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
 	}
 
 	openaiReq := shared.ConvertToOpenAI(req, baseModelID, resolveModel)
@@ -84,12 +107,19 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 
 	reader, status, err := executeOpenCodeChatStreamWithRetry(payload)
 	if err != nil {
+		if shared.IsModelSpecificFailure(status, nil, err) {
+			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		}
 		return errorEnvelope("upstream_error", err.Error()), nil
 	}
 	if status != 200 {
 		buf := new(bytes.Buffer)
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
+		body := buf.Bytes()
+		if shared.IsModelSpecificFailure(status, body, nil) {
+			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		}
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+buf.String(), status), nil
 	}
 
@@ -106,9 +136,17 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		chunks = append(chunks, map[string]any{"Payload": base64encode([]byte(line + "\n"))})
 	}
 	if err := scanner.Err(); err != nil {
+		modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
 		chunks = append(chunks, map[string]any{"Err": err.Error()})
 	}
 	_ = reader.Close()
+	if len(chunks) == 0 {
+		modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		return errorEnvelope("upstream_error", "empty chat stream"), nil
+	}
+	if scanner.Err() == nil {
+		modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
+	}
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{
 		"Headers": map[string]any{
 			"content-type": []string{"text/event-stream"},
@@ -158,19 +196,19 @@ func handleExecutorHTTPRequest(rawReq []byte) ([]byte, error) {
 		}
 	}
 
-	status, respBody, err := httpDo(reqHTTP)
+	resp, err := httpClient.Do(reqHTTP)
+	if err != nil {
+		return errorEnvelope("upstream_error", err.Error()), nil
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return errorEnvelope("upstream_error", err.Error()), nil
 	}
 
-	headers := make(map[string]interface{})
-	for k, v := range reqHTTP.Header {
-		headers[strings.ToLower(k)] = v
-	}
-
 	return okEnvelopeJSON(shared.MustJSON(map[string]interface{}{
-		"StatusCode": status,
-		"Headers":    headers,
+		"StatusCode": resp.StatusCode,
+		"Headers":    shared.HeaderMap(resp.Header),
 		"Body":       base64encode(respBody),
 	}))
 }
@@ -206,7 +244,7 @@ func handleExecutorCountTokens(rawReq []byte) ([]byte, error) {
 // executeOpenCodeChat sends a chat completion request to OpenCode
 
 func executeOpenCodeChat(payload []byte, stream bool) (int, []byte, error) {
-	req, err := http.NewRequest(http.MethodPost, OPENCODE_CHAT_URL, bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, currentOpenCodeChatURL(), bytes.NewReader(payload))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -239,7 +277,7 @@ func executeOpenCodeChat(payload []byte, stream bool) (int, []byte, error) {
 }
 
 func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
-	req, err := http.NewRequest(http.MethodPost, OPENCODE_CHAT_URL, bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, currentOpenCodeChatURL(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, 0, err
 	}

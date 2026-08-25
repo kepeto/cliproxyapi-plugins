@@ -32,6 +32,16 @@ func resolveModel(modelID string) string {
 // resolveModelFromPayload rewrites the "model" field inside an OpenAI-style JSON
 // payload, stripping this prefix and mapping any configured alias to its
 // upstream model ID.
+func payloadModelID(payload []byte) string {
+	var root struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(payload, &root) != nil {
+		return ""
+	}
+	return resolveModel(root.Model)
+}
+
 func resolveModelFromPayload(payload []byte) []byte {
 	if len(payload) == 0 {
 		return payload

@@ -178,6 +178,7 @@ var nousRefresher = shared.NewModelRefresher(
 
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
+var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
 
 func init() {
 	nousRefresher.Start()
@@ -213,6 +214,14 @@ func healthCheckNous() bool {
 }
 
 // storageJSON is the persisted auth blob stored by the host under the "nous-portal-free" type.
+func nousHealthScope(store storageJSON) string {
+	account := store.AccountID
+	if account == "" {
+		account = "default"
+	}
+	return ProviderID + "|" + shared.TrimHTTP(store.InferenceBaseURL) + "|" + account
+}
+
 type storageJSON struct {
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`

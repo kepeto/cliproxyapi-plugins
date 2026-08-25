@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +36,85 @@ func TestModelForAuthReturnsRefreshErrorWhenCatalogUnavailable(t *testing.T) {
 	response, _ := handleModelForAuth([]byte(`{"AuthID":"test-auth"}`))
 	if !strings.Contains(string(response), `"model_refresh_failed"`) {
 		t.Fatalf("expected model refresh error, got: %s", response)
+	}
+}
+
+func TestConfigEndpoints(t *testing.T) {
+	cfg := config{BaseURL: "https://example.test/zen"}
+	chat, models := cfg.endpoints()
+	if chat != "https://example.test/zen/v1/chat/completions" || models != "https://example.test/zen/v1/models" {
+		t.Fatalf("base endpoints = %q, %q", chat, models)
+	}
+
+	cfg.ChatURL = "https://chat.example.test/completions"
+	cfg.ModelsURL = "https://models.example.test/list"
+	chat, models = cfg.endpoints()
+	if chat != cfg.ChatURL || models != cfg.ModelsURL {
+		t.Fatalf("explicit endpoints = %q, %q", chat, models)
+	}
+}
+
+func TestExecutorRefreshesBeforeRequest(t *testing.T) {
+	originalRefresher := opencodeRefresher
+	originalChatURL := currentOpenCodeChatURL()
+	defer func() {
+		opencodeRefresher = originalRefresher
+		endpointMu.Lock()
+		opencodeChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"example-free"}, nil
+	}, nil)
+	endpointMu.Lock()
+	opencodeChatURL = server.URL
+	endpointMu.Unlock()
+
+	response, _ := handleExecutorExecute([]byte(`{"Model":"example-free","Messages":[{"role":"user","content":"hi"}]}`))
+	if !strings.Contains(string(response), `"Payload":"`) {
+		t.Fatalf("executor did not refresh and execute: %s", response)
+	}
+}
+
+func TestExecutorHTTPRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Test") != "yes" {
+			t.Errorf("missing request header")
+		}
+		w.Header().Set("X-Response", "yes")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	response, _ := handleExecutorHTTPRequest([]byte(`{"method":"GET","url":"` + server.URL + `","headers":{"X-Test":"yes"}}`))
+	if !strings.Contains(string(response), `"StatusCode":200`) || !strings.Contains(string(response), `"X-Response":["yes"]`) {
+		t.Fatalf("unexpected http_request response: %s", response)
+	}
+	var envelope struct {
+		Result struct {
+			Body string `json:"Body"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	body, err := base64.StdEncoding.DecodeString(envelope.Result.Body)
+	if err != nil || string(body) != `{"ok":true}` {
+		t.Fatalf("unexpected response body: %q (%v)", body, err)
+	}
+}
+
+func TestExecutorCountTokens(t *testing.T) {
+	response, _ := handleExecutorCountTokens([]byte(`{"Model":"example-free","prompt":"12345678"}`))
+	if !strings.Contains(string(response), `"Count":2`) {
+		t.Fatalf("unexpected count_tokens response: %s", response)
 	}
 }
 

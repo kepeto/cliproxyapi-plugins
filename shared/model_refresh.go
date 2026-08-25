@@ -74,6 +74,16 @@ func (r *ModelRefresher) Stop() {
 	close(r.stopCh)
 }
 
+// Reset discards the current catalog so the next ensure call fetches it again.
+func (r *ModelRefresher) Reset() {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	r.mu.Lock()
+	r.models = nil
+	r.lastRefresh = time.Time{}
+	r.mu.Unlock()
+}
+
 // Refresh performs a single catalog fetch and updates the model list.
 func (r *ModelRefresher) Refresh() error {
 	r.refreshMu.Lock()

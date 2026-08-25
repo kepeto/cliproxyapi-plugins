@@ -80,7 +80,9 @@ plugins:
     kilo-free:
       enabled: true
       priority: 1
-      kilo_base_url: "https://api.kilo.ai/api/gateway"
+      kilo_chat_url: "https://api.kilo.ai/api/gateway/v1/chat/completions"
+      kilo_models_url: "https://api.kilo.ai/api/gateway/models"
+      # Legacy kilo_base_url is also accepted.
 ```
 
 ## Restart CPA
@@ -123,6 +125,7 @@ curl -s -X POST http://localhost:8317/v1/chat/completions \
 - `opencode-free` and `kilo-free` fetch live model catalogs from upstream `/models` on a 3-hour interval.
 - `nous-portal-free` refreshes free models from upstream catalog; falls back to a static list if upstream is unreachable.
 - New upstream models are automatically discovered and exposed without plugin updates.
+- Models that produce repeated model-specific inference failures are temporarily quarantined after three consecutive failures and retried after a cooldown. Authentication, rate-limit, caller-validation, and provider-wide errors do not quarantine individual models.
 
 ## License
 

@@ -19,7 +19,9 @@ The plugin refreshes the free model catalog from the configured upstream
 `/models` endpoint. The catalog is cached and refreshed periodically, so new
 upstream models can become available without rebuilding the plugin. If the
 upstream endpoint is unavailable and no cached catalog exists, the plugin
-returns a model-refresh error.
+returns a model-refresh error. Models that repeatedly fail model-specific
+inference are temporarily quarantined and automatically retried after the
+cooldown.
 
 ## Build
 
@@ -44,6 +46,9 @@ plugins:
       enabled: true
       priority: 1
       opencode_base_url: "https://opencode.ai/zen"
+      # Optional explicit overrides:
+      # opencode_chat_url: "https://opencode.ai/zen/v1/chat/completions"
+      # opencode_models_url: "https://opencode.ai/zen/v1/models"
       # Optional: client-visible alias -> upstream model ID.
       model_aliases:
         ox-alpha: "x-preview-f-free"

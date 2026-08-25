@@ -47,16 +47,22 @@ var fallbackModels = []string{
 }
 
 func modelStaticPayload() string {
+	return modelStaticPayloadForScope(nousHealthScope(storageJSON{InferenceBaseURL: defaultInferenceBaseURL}))
+}
+
+func modelStaticPayloadForScope(scope string) string {
 	models := make([]map[string]any, 0)
 	ids := nousRefresher.Models()
 	if len(ids) == 0 {
 		ids = fallbackModels
 	}
-	for _, id := range ids {
+	for _, id := range modelHealth.Filter(scope, ids) {
 		models = append(models, modelInfo(prefixedModelID(id), id))
 	}
-	for alias := range modelAliases.Entries() {
-		models = append(models, modelInfo(prefixedModelID(alias), alias))
+	for alias, target := range modelAliases.Entries() {
+		if !modelHealth.Hidden(scope, target) {
+			models = append(models, modelInfo(prefixedModelID(alias), alias))
+		}
 	}
 	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
@@ -83,30 +89,24 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
 	if err != nil {
 		// Fallback to cached or static list.
-		models := make([]map[string]any, 0)
-		ids := nousRefresher.Models()
-		if len(ids) == 0 {
-			ids = fallbackModels
-		}
-		for _, id := range ids {
-			models = append(models, modelInfo(prefixedModelID(id), id))
-		}
-		return shared.OKEnvelope(shared.MustJSON(map[string]any{
-			"Provider": ProviderID,
-			"Models":   models,
-		}))
+		return shared.OKEnvelope(modelStaticPayloadForScope(nousHealthScope(store)))
 	}
 
 	freeModels := filterFreeModels(catalog)
+	scope := nousHealthScope(store)
 	models := make([]map[string]any, 0, len(freeModels))
 	for _, m := range freeModels {
-		models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
+		if !modelHealth.Hidden(scope, m.ID) {
+			models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
+		}
 	}
-	for alias := range modelAliases.Entries() {
-		models = append(models, modelInfo(prefixedModelID(alias), alias))
+	for alias, target := range modelAliases.Entries() {
+		if !modelHealth.Hidden(scope, target) {
+			models = append(models, modelInfo(prefixedModelID(alias), alias))
+		}
 	}
 	if len(models) == 0 {
-		return shared.OKEnvelope(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayloadForScope(scope))
 	}
 
 	// Persist catalog into the auth blob for later reuse.

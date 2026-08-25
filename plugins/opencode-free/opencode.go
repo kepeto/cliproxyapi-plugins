@@ -6,16 +6,16 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 const (
-	UPSTREAM_OPENCODE   = "https://opencode.ai/zen"
-	OPENCODE_API        = UPSTREAM_OPENCODE + "/v1"
-	OPENCODE_MODELS_URL = OPENCODE_API + "/models"
-	OPENCODE_CHAT_URL   = OPENCODE_API + "/chat/completions"
+	defaultOpenCodeBaseURL   = "https://opencode.ai/zen"
+	defaultOpenCodeModelsURL = defaultOpenCodeBaseURL + "/v1/models"
+	defaultOpenCodeChatURL   = defaultOpenCodeBaseURL + "/v1/chat/completions"
 
 	PROVIDER_ID = "opencode-free"
 	EXECUTOR_ID = "opencode-free"
@@ -47,15 +47,22 @@ func randomRequestID() string {
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
 
-// opencodeRefresher periodically fetches the live model catalog from OpenCode.
-var opencodeRefresher = shared.NewModelRefresher(
-	3*time.Hour,
-	fetchOpenCodeModels,
-	healthCheckOpenCode,
+var (
+	endpointMu        sync.RWMutex
+	opencodeChatURL   = defaultOpenCodeChatURL
+	opencodeModelsURL = defaultOpenCodeModelsURL
+
+	// opencodeRefresher periodically fetches the live model catalog from OpenCode.
+	opencodeRefresher = shared.NewModelRefresher(
+		3*time.Hour,
+		fetchOpenCodeModels,
+		healthCheckOpenCode,
+	)
 )
 
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
+var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
 
 func init() {
 	opencodeRefresher.Start()
@@ -63,7 +70,7 @@ func init() {
 
 // fetchOpenCodeModels retrieves the current free model list from OpenCode.
 func fetchOpenCodeModels() ([]string, error) {
-	req, err := http.NewRequest(http.MethodGet, OPENCODE_MODELS_URL, nil)
+	req, err := http.NewRequest(http.MethodGet, currentOpenCodeModelsURL(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +110,7 @@ func fetchOpenCodeModels() ([]string, error) {
 
 // healthCheckOpenCode checks if OpenCode /models endpoint is alive
 func healthCheckOpenCode() bool {
-	req, err := http.NewRequest(http.MethodGet, OPENCODE_MODELS_URL, nil)
+	req, err := http.NewRequest(http.MethodGet, currentOpenCodeModelsURL(), nil)
 	if err != nil {
 		return false
 	}
@@ -121,6 +128,9 @@ func healthCheckOpenCode() bool {
 
 // config holds plugin-level overrides resolved from plugins.configs.opencode-free.
 type config struct {
+	BaseURL      string            `json:"opencode_base_url"`
+	ChatURL      string            `json:"opencode_chat_url"`
+	ModelsURL    string            `json:"opencode_models_url"`
 	ModelAliases map[string]string `json:"model_aliases"`
 	Prefix       string            `json:"prefix"`
 }
@@ -146,6 +156,16 @@ func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
+
+	chatURL, modelsURL := cfg.endpoints()
+	endpointMu.Lock()
+	changed := opencodeChatURL != chatURL || opencodeModelsURL != modelsURL
+	opencodeChatURL = chatURL
+	opencodeModelsURL = modelsURL
+	endpointMu.Unlock()
+	if changed {
+		opencodeRefresher.Reset()
+	}
 }
 
 func resolveConfig(raw []byte) config {
@@ -153,6 +173,38 @@ func resolveConfig(raw []byte) config {
 	// Host forwards the config subtree as YAML bytes; tolerate raw JSON too.
 	_ = shared.UnmarshalConfig(raw, &cfg)
 	return cfg
+}
+
+func (c config) endpoints() (string, string) {
+	baseURL := trimHTTP(c.BaseURL)
+	if baseURL == "" {
+		baseURL = defaultOpenCodeBaseURL
+	}
+	chatURL := baseURL + "/v1/chat/completions"
+	modelsURL := baseURL + "/v1/models"
+	if value := trimHTTP(c.ChatURL); value != "" {
+		chatURL = value
+	}
+	if value := trimHTTP(c.ModelsURL); value != "" {
+		modelsURL = value
+	}
+	return chatURL, modelsURL
+}
+
+func currentOpenCodeChatURL() string {
+	endpointMu.RLock()
+	defer endpointMu.RUnlock()
+	return opencodeChatURL
+}
+
+func currentOpenCodeModelsURL() string {
+	endpointMu.RLock()
+	defer endpointMu.RUnlock()
+	return opencodeModelsURL
+}
+
+func openCodeHealthScope() string {
+	return PROVIDER_ID + "|" + currentOpenCodeChatURL()
 }
 
 func httpDo(req *http.Request) (int, []byte, error) {

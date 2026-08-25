@@ -30,15 +30,31 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 	if !store.valid() {
 		return errorEnvelopeWithStatus("auth_required", "nous-portal-free credential required", 401), nil
 	}
+	modelID := payloadModelID(req.Payload)
+	scope := nousHealthScope(store)
+	if !modelHealth.Allow(scope, modelID) {
+		return errorEnvelope("model_quarantined", "model is temporarily unavailable"), nil
+	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
 	body, status, headers, err := shared.DoChatRequest(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
 	if err != nil {
+		if shared.IsModelSpecificFailure(status, body, err) {
+			modelHealth.RecordFailure(scope, modelID)
+		}
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
 	}
 	if status != 200 {
+		if shared.IsModelSpecificFailure(status, body, nil) {
+			modelHealth.RecordFailure(scope, modelID)
+		}
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
+	if !shared.ValidChatResponse(body) {
+		modelHealth.RecordFailure(scope, modelID)
+		return errorEnvelope("executor_execute_failed", "invalid or empty chat response"), nil
+	}
+	modelHealth.RecordSuccess(scope, modelID)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Payload": base64encode(body),
 		"Headers": shared.HeaderMap(headers),
@@ -61,16 +77,28 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	if !store.valid() {
 		return errorEnvelopeWithStatus("auth_required", "nous-portal-free credential required", 401), nil
 	}
+	modelID := payloadModelID(req.Payload)
+	scope := nousHealthScope(store)
+	if !modelHealth.Allow(scope, modelID) {
+		return errorEnvelope("model_quarantined", "model is temporarily unavailable"), nil
+	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
 	reader, status, headers, err := shared.DoChatStream(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
 	if err != nil {
+		if shared.IsModelSpecificFailure(status, nil, err) {
+			modelHealth.RecordFailure(scope, modelID)
+		}
 		return errorEnvelope("executor_stream_failed", err.Error()), nil
 	}
 	if status != 200 {
 		buf := new(bytes.Buffer)
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
+		body := buf.Bytes()
+		if shared.IsModelSpecificFailure(status, body, nil) {
+			modelHealth.RecordFailure(scope, modelID)
+		}
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+buf.String(), status), nil
 	}
 
@@ -86,6 +114,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
+			modelHealth.RecordFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -96,15 +125,22 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
+			modelHealth.RecordFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
+		modelHealth.RecordFailure(scope, modelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
+	if len(chunks) == 0 {
+		modelHealth.RecordFailure(scope, modelID)
+		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
+	}
+	modelHealth.RecordSuccess(scope, modelID)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Headers": shared.HeaderMap(headers),
 		"Chunks":  chunks,

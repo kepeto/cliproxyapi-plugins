@@ -23,11 +23,13 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	}
 
 	models := make([]map[string]interface{}, 0)
-	for _, id := range kiloRefresher.Models() {
+	for _, id := range modelHealth.Filter(kiloHealthScope(), kiloRefresher.Models()) {
 		models = append(models, modelEntry(id))
 	}
-	for alias := range modelAliases.Entries() {
-		models = append(models, modelEntry(alias))
+	for alias, target := range modelAliases.Entries() {
+		if !modelHealth.Hidden(kiloHealthScope(), target) {
+			models = append(models, modelEntry(alias))
+		}
 	}
 	result, _ := shared.OKEnvelope(shared.MustJSON(map[string]interface{}{
 		"Provider": PROVIDER_ID,
@@ -56,7 +58,7 @@ func modelEntry(id string) map[string]interface{} {
 func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	var req map[string]any
 	if err := json.Unmarshal(rawReq, &req); err != nil {
-		return shared.OKEnvelope(`{"Provider":"","AuthID":"","Models":[]}`)
+		return errorEnvelope("invalid_request", "bad json"), nil
 	}
 
 	authID, _ := req["AuthID"].(string)
@@ -66,15 +68,17 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 
 	models := make([]map[string]interface{}, 0)
 	catalogEntries := make([]map[string]interface{}, 0)
-	for _, id := range kiloRefresher.Models() {
+	for _, id := range modelHealth.Filter(kiloHealthScope(), kiloRefresher.Models()) {
 		models = append(models, modelEntry(id))
 		catalogEntries = append(catalogEntries, map[string]interface{}{
 			"id":   id,
 			"name": id,
 		})
 	}
-	for alias := range modelAliases.Entries() {
-		models = append(models, modelEntry(alias))
+	for alias, target := range modelAliases.Entries() {
+		if !modelHealth.Hidden(kiloHealthScope(), target) {
+			models = append(models, modelEntry(alias))
+		}
 	}
 
 	catalogJSON, _ := json.Marshal(catalogEntries)

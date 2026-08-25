@@ -161,8 +161,9 @@ func registerPayload() string {
     "GitHubRepository": "https://github.com/kepeto/cliproxyapi-plugins",
     "Logo": "https://kilo.ai/favicon.ico",
     "ConfigFields": [
-      {"Name": "kilo_chat_url", "Type": "string", "Description": "KiloCode chat completions URL (default https://api.kilo.ai/api/gateway/chat/completions)"},
+      {"Name": "kilo_chat_url", "Type": "string", "Description": "KiloCode chat completions URL (default https://api.kilo.ai/api/gateway/v1/chat/completions)"},
       {"Name": "kilo_models_url", "Type": "string", "Description": "KiloCode models URL (default https://api.kilo.ai/api/gateway/models)"},
+      {"Name": "kilo_base_url", "Type": "string", "Description": "Legacy base URL; derives /v1/chat/completions and /models when explicit URLs are not set"},
       {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default kilo-free)"}
     ]
   },

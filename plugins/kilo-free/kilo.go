@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 const (
-	KILO_CHAT_URL   = "https://api.kilo.ai/api/gateway/v1/chat/completions"
-	KILO_MODELS_URL = "https://api.kilo.ai/api/gateway/models"
+	defaultKiloBaseURL   = "https://api.kilo.ai/api/gateway"
+	defaultKiloChatURL   = defaultKiloBaseURL + "/v1/chat/completions"
+	defaultKiloModelsURL = defaultKiloBaseURL + "/models"
 
 	PROVIDER_ID = "kilo-free"
 	EXECUTOR_ID = "kilo-free"
@@ -23,14 +25,21 @@ const (
 )
 
 // kiloRefresher periodically fetches the live model catalog from KiloCode.
-var kiloRefresher = shared.NewModelRefresher(
-	3*time.Hour,
-	fetchKiloCatalog,
-	healthCheckKilo,
+var (
+	endpointMu    sync.RWMutex
+	kiloChatURL   = defaultKiloChatURL
+	kiloModelsURL = defaultKiloModelsURL
+
+	kiloRefresher = shared.NewModelRefresher(
+		3*time.Hour,
+		fetchKiloCatalog,
+		healthCheckKilo,
+	)
 )
 
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
+var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
 
 func init() {
 	kiloRefresher.Start()
@@ -47,6 +56,9 @@ var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
 
 // config holds plugin-level overrides resolved from plugins.configs.kilo-free.
 type config struct {
+	BaseURL      string            `json:"kilo_base_url"`
+	ChatURL      string            `json:"kilo_chat_url"`
+	ModelsURL    string            `json:"kilo_models_url"`
 	Prefix       string            `json:"prefix"`
 	ModelAliases map[string]string `json:"model_aliases"`
 }
@@ -72,6 +84,16 @@ func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
+
+	chatURL, modelsURL := cfg.endpoints()
+	endpointMu.Lock()
+	changed := kiloChatURL != chatURL || kiloModelsURL != modelsURL
+	kiloChatURL = chatURL
+	kiloModelsURL = modelsURL
+	endpointMu.Unlock()
+	if changed {
+		kiloRefresher.Reset()
+	}
 }
 
 func resolveConfig(raw []byte) config {
@@ -79,6 +101,38 @@ func resolveConfig(raw []byte) config {
 	// Host forwards the config subtree as YAML bytes; tolerate raw JSON too.
 	_ = shared.UnmarshalConfig(raw, &cfg)
 	return cfg
+}
+
+func (c config) endpoints() (string, string) {
+	chatURL := defaultKiloChatURL
+	modelsURL := defaultKiloModelsURL
+	if baseURL := trimHTTP(c.BaseURL); baseURL != "" {
+		chatURL = baseURL + "/v1/chat/completions"
+		modelsURL = baseURL + "/models"
+	}
+	if value := trimHTTP(c.ChatURL); value != "" {
+		chatURL = value
+	}
+	if value := trimHTTP(c.ModelsURL); value != "" {
+		modelsURL = value
+	}
+	return chatURL, modelsURL
+}
+
+func currentKiloChatURL() string {
+	endpointMu.RLock()
+	defer endpointMu.RUnlock()
+	return kiloChatURL
+}
+
+func currentKiloModelsURL() string {
+	endpointMu.RLock()
+	defer endpointMu.RUnlock()
+	return kiloModelsURL
+}
+
+func kiloHealthScope() string {
+	return PROVIDER_ID + "|" + currentKiloChatURL()
 }
 
 func httpDo(req *http.Request) (int, []byte, error) {
@@ -99,7 +153,7 @@ func fetchKiloCatalog() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, KILO_MODELS_URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentKiloModelsURL(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +200,7 @@ func fetchKiloCatalog() ([]string, error) {
 
 // healthCheckKilo checks if KiloCode /models endpoint is alive
 func healthCheckKilo() bool {
-	req, err := http.NewRequest(http.MethodGet, KILO_MODELS_URL, nil)
+	req, err := http.NewRequest(http.MethodGet, currentKiloModelsURL(), nil)
 	if err != nil {
 		return false
 	}

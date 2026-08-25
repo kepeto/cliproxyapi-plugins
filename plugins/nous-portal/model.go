@@ -46,12 +46,18 @@ var fallbackModels = []string{
 }
 
 func modelStaticPayload() string {
+	return modelStaticPayloadForScope(nousHealthScope(storageJSON{InferenceBaseURL: defaultInferenceBaseURL}))
+}
+
+func modelStaticPayloadForScope(scope string) string {
 	models := make([]map[string]any, 0, len(fallbackModels))
-	for _, id := range fallbackModels {
+	for _, id := range modelHealth.Filter(scope, fallbackModels) {
 		models = append(models, modelEntry(id))
 	}
-	for alias := range modelAliases.Entries() {
-		models = append(models, modelEntry(alias))
+	for alias, target := range modelAliases.Entries() {
+		if !modelHealth.Hidden(scope, target) {
+			models = append(models, modelEntry(alias))
+		}
 	}
 	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
@@ -81,15 +87,20 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		return shared.OKEnvelope(modelStaticPayload())
 	}
 
+	scope := nousHealthScope(store)
 	models := make([]map[string]any, 0, len(catalog))
 	for _, m := range catalog {
-		models = append(models, modelEntry(m.ID))
+		if !modelHealth.Hidden(scope, m.ID) {
+			models = append(models, modelEntry(m.ID))
+		}
 	}
-	for alias := range modelAliases.Entries() {
-		models = append(models, modelEntry(alias))
+	for alias, target := range modelAliases.Entries() {
+		if !modelHealth.Hidden(scope, target) {
+			models = append(models, modelEntry(alias))
+		}
 	}
 	if len(models) == 0 {
-		return shared.OKEnvelope(modelStaticPayload())
+		return shared.OKEnvelope(modelStaticPayloadForScope(scope))
 	}
 
 	// Persist catalog into the auth blob for later reuse.

@@ -162,6 +162,8 @@ func registerPayload() string {
     "Logo": "https://opencode.ai/favicon.ico",
     "ConfigFields": [
       {"Name": "opencode_base_url", "Type": "string", "Description": "OpenCode Zen base URL (default https://opencode.ai/zen)"},
+      {"Name": "opencode_chat_url", "Type": "string", "Description": "Optional explicit chat completions URL"},
+      {"Name": "opencode_models_url", "Type": "string", "Description": "Optional explicit models URL"},
       {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default opencode-free)"}
     ]
   },
