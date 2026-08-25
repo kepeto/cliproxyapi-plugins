@@ -6,7 +6,7 @@ CLIProxyAPI plugin for [OpenCode Zen](https://opencode.ai) free-tier models.
 
 - Provides access to OpenCode Zen free models
 - No authentication required (keyless upstream)
-- Static model catalog baked into plugin
+- Dynamically refreshes the free model catalog from the upstream `/models` endpoint
 - Supports streaming chat completions
 
 ## Auth Flow
@@ -15,10 +15,11 @@ No OAuth needed. Plugin returns a dummy auth response; executor sends requests d
 
 ## Model Catalog
 
-Static list of free models:
-- `nemotron-3-ultra-free`
-- `gemini-2.0-flash-exp`
-- `llama-3.3-70b-instruct-free`
+The plugin refreshes the free model catalog from the configured upstream
+`/models` endpoint. The catalog is cached and refreshed periodically, so new
+upstream models can become available without rebuilding the plugin. If the
+upstream endpoint is unavailable and no cached catalog exists, the plugin
+returns a model-refresh error.
 
 ## Build
 
@@ -30,8 +31,8 @@ CGO_ENABLED=1 go build -buildmode=c-shared -o opencode-free.so .
 ## Deploy
 
 ```bash
-cp plugins/opencode-free/opencode-free.so ~/cliproxyapi/plugins/
-systemctl --user restart cliproxyapi.service
+cp plugins/opencode-free/opencode-free.so ~/.cli-proxy-api/plugins/
+systemctl --user restart cli-proxy-api.service
 ```
 
 ## Configuration
@@ -55,13 +56,13 @@ alias are routed to its upstream model. Applied on hot reload via
 ## Upstream Endpoint
 
 - Chat: `https://opencode.ai/zen/v1/chat/completions`
-- Models: Static list (no dynamic fetch)
+- Models: Dynamic catalog from the configured upstream `/models` endpoint
 
 ## Files
 
 - `plugin.go` — ABI entry point, method dispatch
 - `auth.go` — Dummy auth (no login needed)
-- `model.go` — Static model list
+- `model.go` — Dynamic model catalog refresh and model entries
 - `executor.go` — OpenAI-compatible request translation
 - `util.go` — HTTP helpers
 

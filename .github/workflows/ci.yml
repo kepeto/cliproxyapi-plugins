@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Go quality and ABI checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: |
+            shared/go.sum
+            plugins/nous-portal/go.sum
+            plugins/nous-portal-free/go.sum
+            plugins/opencode-free/go.sum
+            plugins/kilo-free/go.sum
+
+      - name: Check formatting, tests, and vet
+        run: make check
+
+      - name: Build and verify plugin ABI
+        run: make verify

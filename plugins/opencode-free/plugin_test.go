@@ -2,8 +2,39 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
+
+func TestModelForAuthRefreshesEmptyCatalog(t *testing.T) {
+	original := opencodeRefresher
+	defer func() { opencodeRefresher = original }()
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"example-free"}, nil
+	}, nil)
+
+	response, _ := handleModelForAuth([]byte(`{"AuthID":"test-auth"}`))
+	if !strings.Contains(string(response), "example-free") {
+		t.Fatalf("model.for_auth response does not contain refreshed model: %s", response)
+	}
+}
+
+func TestModelForAuthReturnsRefreshErrorWhenCatalogUnavailable(t *testing.T) {
+	original := opencodeRefresher
+	defer func() { opencodeRefresher = original }()
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return nil, errors.New("upstream unavailable")
+	}, nil)
+
+	response, _ := handleModelForAuth([]byte(`{"AuthID":"test-auth"}`))
+	if !strings.Contains(string(response), `"model_refresh_failed"`) {
+		t.Fatalf("expected model refresh error, got: %s", response)
+	}
+}
 
 func TestRegisterPayload(t *testing.T) {
 	payload := registerPayload()

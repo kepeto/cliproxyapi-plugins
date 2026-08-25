@@ -22,8 +22,17 @@ Not a fork of CPA — these are out-of-tree provider plugins loaded via CPA's pl
 ## Build
 
 ```bash
-# Build all plugins
+# Build all production plugins
 make build
+
+# Build one production plugin
+make build PLUGIN=opencode-free
+
+# Run formatting, unit tests, and static checks
+make check
+
+# Build all plugins and run the native ABI smoke check
+make verify
 
 # Or build individually
 cd plugins/opencode-free && CGO_ENABLED=1 go build -buildmode=c-shared -o opencode-free.so .
@@ -34,10 +43,10 @@ Output: `<plugin>.so` in each plugin directory.
 ## Deploy
 
 ```bash
-# Copy .so files to CPA plugins dir
+# Copy .so files to CPA's direct plugin directory
 cp plugins/*/*.so ~/.cli-proxy-api/plugins/
 
-# Or use the deploy target
+# Or use the version-safe deploy target
 make deploy
 ```
 
@@ -75,6 +84,10 @@ plugins:
 ```
 
 ## Restart CPA
+
+CPA loads plugin shared objects directly from its plugin directory and does not
+recurse into architecture subdirectories. After deployment, restart CPA rather
+than hot-swapping or removing a loaded Go plugin:
 
 ```bash
 systemctl --user restart cli-proxy-api.service

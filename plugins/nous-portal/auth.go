@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -93,7 +94,7 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 		return errorEnvelope("login_start_failed", "device code request failed: "+err.Error()), nil
 	}
 	if status != 200 {
-		return errorEnvelopeWithStatus("login_start_failed", "device code request returned "+itoa(status), status), nil
+		return errorEnvelopeWithStatus("login_start_failed", "device code request returned "+strconv.Itoa(status), status), nil
 	}
 	var dc deviceCodeResponse
 	if err := json.Unmarshal(body, &dc); err != nil {
@@ -278,7 +279,7 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		return errorEnvelope("refresh_failed", "refresh request failed: "+err.Error()), nil
 	}
 	if status != 200 {
-		return errorEnvelopeWithStatus("refresh_failed", "refresh returned "+itoa(status), status), nil
+		return errorEnvelopeWithStatus("refresh_failed", "refresh returned "+strconv.Itoa(status), status), nil
 	}
 	var tok tokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
@@ -404,26 +405,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	var buf [20]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

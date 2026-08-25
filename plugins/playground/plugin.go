@@ -260,7 +260,7 @@ func isBase64(s string) bool {
 	if s == "" {
 		return false
 	}
-	_, err := base64.RawURLEncoding.DecodeString(s)
+	_, err := base64.StdEncoding.DecodeString(s)
 	return err == nil
 }
 
@@ -309,43 +309,7 @@ func cleanManagementPath(path string) string {
 }
 
 func encodeBase64(b []byte) string {
-	const enc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	if len(b) == 0 {
-		return ""
-	}
-	var out strings.Builder
-	out.Grow((len(b) + 2) / 3 * 4)
-	for i := 0; i < len(b); i += 3 {
-		n := b[i] >> 2
-		out.WriteByte(enc[n])
-		n = (b[i] & 0x03) << 4
-		if i+1 < len(b) {
-			n |= b[i+1] >> 4
-		}
-		out.WriteByte(enc[n])
-		n = 0
-		if i+1 < len(b) {
-			n = (b[i+1] & 0x0F) << 2
-		}
-		if i+2 < len(b) {
-			n |= b[i+2] >> 6
-		}
-		if i+1 < len(b) {
-			out.WriteByte(enc[n])
-		} else {
-			out.WriteByte('=')
-		}
-		n = 0
-		if i+2 < len(b) {
-			n = b[i+2] & 0x3F
-		}
-		if i+2 < len(b) {
-			out.WriteByte(enc[n])
-		} else {
-			out.WriteByte('=')
-		}
-	}
-	return out.String()
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 func okEnvelopeJSON(result string) ([]byte, error) {

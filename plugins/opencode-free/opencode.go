@@ -37,11 +37,6 @@ func opencodeHeaders() map[string]string {
 	}
 }
 
-func mustJSON(v interface{}) string {
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
 func randomSessionID() string {
 	return "cli-" + shared.RandomHex(16)
 }
@@ -166,30 +161,9 @@ func httpDo(req *http.Request) (int, []byte, error) {
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := ioReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
 	return resp.StatusCode, raw, nil
-}
-
-func ioReadAll(r io.Reader) ([]byte, error) {
-	buf := make([]byte, 0, 4096)
-	for {
-		tmp := make([]byte, 4096)
-		n, err := r.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return buf, err
-		}
-		if n == 0 {
-			break
-		}
-	}
-	return buf, nil
 }

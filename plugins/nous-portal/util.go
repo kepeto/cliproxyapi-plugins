@@ -48,13 +48,3 @@ func httpPostForm(portalBaseURL, path string, values map[string]string, timeout 
 	}
 	return resp.StatusCode, raw, nil
 }
-
-// urlEncode does minimal form-encoding (no net/url import to keep deps tiny).
-func urlEncode(v string) string {
-	return shared.URLEncode(v)
-}
-
-func hexOf(c byte) string {
-	const digits = "0123456789ABCDEF"
-	return string([]byte{digits[c>>4], digits[c&0x0F]})
-}

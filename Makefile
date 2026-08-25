@@ -4,7 +4,7 @@ DIST := dist
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.pluginVersion=$(VERSION)"
 
-.PHONY: all build verify clean dist arch-% help $(PLUGINS) deploy verify-deploy
+.PHONY: all build test vet fmt-check check verify clean dist arch-% help $(PLUGINS) deploy verify-deploy
 
 all: build
 
@@ -17,10 +17,32 @@ help:
 	@echo "  make arch-linux-amd64"
 	@echo "  make arch-linux-arm64"
 	@echo "  make arch-linux-arm"
+	@echo "  Cross-arch c-shared builds require CC_ARM64/CC_ARM (default: aarch64-linux-gnu-gcc / arm-linux-gnueabihf-gcc)"
 	@echo "  make deploy         Build + install to CPA plugin dir (VERSION from git)"
 	@echo "  make verify-deploy  Check embedded version == filename for installed plugins"
 
-build: $(PLUGINS)
+build: $(if $(PLUGIN),$(PLUGIN),$(PLUGINS))
+
+test:
+	@for dir in shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do \
+		echo "== test $$dir =="; \
+		(cd "$$dir" && go test ./...) || exit 1; \
+	done
+
+vet:
+	@for dir in shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do \
+		echo "== vet $$dir =="; \
+		(cd "$$dir" && go vet ./...) || exit 1; \
+	done
+
+fmt-check:
+	@files="$$(find shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free -name '*.go' -not -path '*/vendor/*' -print)"; \
+	unformatted="$$(gofmt -l $$files)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "unformatted Go files:"; echo "$$unformatted"; exit 1; \
+	fi
+
+check: fmt-check test vet
 
 $(PLUGINS):
 	cd plugins/$@ && CGO_ENABLED=$(CGO) go build $(LDFLAGS) -buildmode=c-shared -o $@.so .
@@ -35,13 +57,17 @@ clean:
 
 # Install location of the CPA host; overridable for tests.
 CPA_CONFIG ?= $(HOME)/.cli-proxy-api/config.yaml
-PLUGIN_DIR ?= $(HOME)/.cli-proxy-api/plugins/linux/amd64
+# CPA loads plugin shared objects directly from this directory; it does not recurse.
+PLUGIN_DIR ?= $(HOME)/.cli-proxy-api/plugins
 DEPLOY_VERSION ?= $(shell git describe --tags --match 'v*' --abbrev=0 2>/dev/null | sed 's/^v//' || echo dev)
+CC_ARM64 ?= aarch64-linux-gnu-gcc
+CC_ARM ?= arm-linux-gnueabihf-gcc
 
 # Single entry point for local installs: builds with the release version,
 # copies under the matching name, then verifies embedded == filename. Never
 # hand-copy .so files — a renamed file is how version mismatch happens.
 deploy:
+	@mkdir -p "$(PLUGIN_DIR)"
 	@$(MAKE) --no-print-directory VERSION=$(DEPLOY_VERSION) build
 	@for plugin in $(PLUGINS); do \
 		cp plugins/$$plugin/$$plugin.so $(PLUGIN_DIR)/$$plugin-v$(DEPLOY_VERSION).so || exit 1; \
@@ -72,15 +98,15 @@ arch-linux-amd64: $(DIST)
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-amd64.so ./plugins/kilo-free
 
 arch-linux-arm64: $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-arm64.so ./plugins/nous-portal
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-arm64.so ./plugins/nous-portal-free
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-arm64.so ./plugins/opencode-free
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-arm64.so ./plugins/kilo-free
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-arm64.so ./plugins/nous-portal
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-arm64.so ./plugins/nous-portal-free
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-arm64.so ./plugins/opencode-free
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-arm64.so ./plugins/kilo-free
 
 arch-linux-arm: $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-arm.so ./plugins/nous-portal
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-arm.so ./plugins/nous-portal-free
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-arm.so ./plugins/opencode-free
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-arm.so ./plugins/kilo-free
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-arm.so ./plugins/nous-portal
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-arm.so ./plugins/nous-portal-free
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-arm.so ./plugins/opencode-free
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-arm.so ./plugins/kilo-free
 
 dist: arch-linux-amd64 arch-linux-arm64 arch-linux-arm

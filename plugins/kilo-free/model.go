@@ -7,11 +7,18 @@ import (
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
+func ensureModels() error {
+	if err := kiloRefresher.RefreshIfEmpty(); err != nil && len(kiloRefresher.Models()) == 0 {
+		return err
+	}
+	return nil
+}
+
 func handleModelStatic(rawReq []byte) ([]byte, error) {
 	if err := keylessAuth.Ensure(rawReq); err != nil {
 		return errorEnvelope("auth_bootstrap_failed", err.Error()), nil
 	}
-	if err := kiloRefresher.RefreshIfEmpty(); err != nil && len(kiloRefresher.Models()) == 0 {
+	if err := ensureModels(); err != nil {
 		return errorEnvelope("model_refresh_failed", err.Error()), nil
 	}
 
@@ -53,6 +60,9 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	}
 
 	authID, _ := req["AuthID"].(string)
+	if err := ensureModels(); err != nil {
+		return errorEnvelope("model_refresh_failed", err.Error()), nil
+	}
 
 	models := make([]map[string]interface{}, 0)
 	catalogEntries := make([]map[string]interface{}, 0)

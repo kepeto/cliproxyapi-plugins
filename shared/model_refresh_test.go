@@ -1,10 +1,38 @@
 package shared
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestStartRetriesEmptyCatalog(t *testing.T) {
+	var calls atomic.Int32
+	refreshed := make(chan struct{})
+	refresher := NewModelRefresher(time.Hour, func() ([]string, error) {
+		if calls.Add(1) == 1 {
+			return nil, errors.New("temporary outage")
+		}
+		close(refreshed)
+		return []string{"model-a"}, nil
+	}, nil)
+	refresher.retryInterval = time.Millisecond
+	defer refresher.Stop()
+
+	refresher.Start()
+	select {
+	case <-refreshed:
+	case <-time.After(time.Second):
+		t.Fatal("refresher did not retry an empty catalog")
+	}
+	if err := refresher.RefreshIfEmpty(); err != nil {
+		t.Fatal(err)
+	}
+	if models := refresher.Models(); len(models) != 1 || models[0] != "model-a" {
+		t.Fatalf("unexpected models after retry: %#v", models)
+	}
+}
 
 func TestRefreshIfEmptyWaitsForInflightRefresh(t *testing.T) {
 	started := make(chan struct{})

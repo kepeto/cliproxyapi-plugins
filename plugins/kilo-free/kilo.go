@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -40,11 +41,6 @@ func kiloHeaders() map[string]string {
 		"Content-Type": "application/json",
 		"Accept":       "application/json",
 	}
-}
-
-func mustJSON(v interface{}) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
@@ -91,34 +87,11 @@ func httpDo(req *http.Request) (int, []byte, error) {
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := ioReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
 	return resp.StatusCode, raw, nil
-}
-
-func ioReadAll(r interface {
-	Read([]byte) (int, error)
-}) ([]byte, error) {
-	buf := make([]byte, 0, 4096)
-	for {
-		tmp := make([]byte, 4096)
-		n, err := r.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-		}
-		if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io.EOF" {
-				break
-			}
-			return buf, err
-		}
-		if n == 0 {
-			break
-		}
-	}
-	return buf, nil
 }
 
 // fetchKiloCatalog retrieves the current free model list from KiloCode.

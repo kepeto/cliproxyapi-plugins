@@ -14,28 +14,6 @@ import (
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
-func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	var buf [20]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
-
 var streamTransport = &http.Transport{
 	ResponseHeaderTimeout: 30 * time.Second,
 }
@@ -74,7 +52,7 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 	if status < 200 || status >= 300 {
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
-	return okEnvelopeJSON(mustJSON(map[string]interface{}{
+	return okEnvelopeJSON(shared.MustJSON(map[string]interface{}{
 		"Payload": base64encode(body),
 		"Headers": map[string][]string{"content-type": {"application/json"}},
 	}))
@@ -109,7 +87,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		buf := new(bytes.Buffer)
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
-		return errorEnvelopeWithStatus("upstream_error", "inference returned "+itoa(status)+": "+buf.String(), status), nil
+		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+buf.String(), status), nil
 	}
 
 	// Drain the SSE stream and encode each raw chunk as base64 for the host envelope.
@@ -143,7 +121,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
-	return okEnvelopeJSON(mustJSON(map[string]any{
+	return okEnvelopeJSON(shared.MustJSON(map[string]any{
 		"Headers": map[string]any{
 			"content-type": []string{"text/event-stream"},
 		},
@@ -169,7 +147,7 @@ func executeKiloChat(payload []byte, stream bool) (int, []byte, error) {
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	body, err := ioReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}

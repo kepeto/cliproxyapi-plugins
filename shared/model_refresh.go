@@ -7,14 +7,15 @@ import (
 
 // ModelRefresher periodically refreshes a model list from upstream.
 type ModelRefresher struct {
-	mu          sync.RWMutex
-	refreshMu   sync.Mutex
-	models      []string
-	lastRefresh time.Time
-	interval    time.Duration
-	fetch       func() ([]string, error)
-	healthCheck func() bool
-	stopCh      chan struct{}
+	mu            sync.RWMutex
+	refreshMu     sync.Mutex
+	models        []string
+	lastRefresh   time.Time
+	interval      time.Duration
+	retryInterval time.Duration
+	fetch         func() ([]string, error)
+	healthCheck   func() bool
+	stopCh        chan struct{}
 }
 
 // NewModelRefresher creates a refresher with the given interval and fetch function.
@@ -22,12 +23,17 @@ func NewModelRefresher(interval time.Duration, fetch func() ([]string, error), h
 	if interval <= 0 {
 		interval = 3 * time.Hour
 	}
+	retryInterval := time.Minute
+	if interval < retryInterval {
+		retryInterval = interval
+	}
 	return &ModelRefresher{
-		interval:    interval,
-		models:      make([]string, 0),
-		fetch:       fetch,
-		healthCheck: healthCheck,
-		stopCh:      make(chan struct{}),
+		interval:      interval,
+		retryInterval: retryInterval,
+		models:        make([]string, 0),
+		fetch:         fetch,
+		healthCheck:   healthCheck,
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -36,17 +42,31 @@ func NewModelRefresher(interval time.Duration, fetch func() ([]string, error), h
 func (r *ModelRefresher) Start() {
 	go func() {
 		_ = r.Refresh()
-		ticker := time.NewTicker(r.interval)
+		ticker := time.NewTicker(r.nextInterval())
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				_ = r.Refresh()
+				ticker.Reset(r.nextInterval())
 			case <-r.stopCh:
 				return
 			}
 		}
 	}()
+}
+
+// nextInterval retries empty catalogs quickly, then returns to the normal
+// refresh interval after a successful catalog fetch. This avoids keeping an
+// empty catalog for the full normal interval after boot or a transient outage.
+func (r *ModelRefresher) nextInterval() time.Duration {
+	r.mu.RLock()
+	empty := len(r.models) == 0
+	r.mu.RUnlock()
+	if empty {
+		return r.retryInterval
+	}
+	return r.interval
 }
 
 // Stop halts the background refresh loop.

@@ -8,11 +8,18 @@ import (
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
+func ensureModels() error {
+	if err := opencodeRefresher.RefreshIfEmpty(); err != nil && len(opencodeRefresher.Models()) == 0 {
+		return err
+	}
+	return nil
+}
+
 func handleModelStatic(rawReq []byte) ([]byte, error) {
 	if err := keylessAuth.Ensure(rawReq); err != nil {
 		return errorEnvelope("auth_bootstrap_failed", err.Error()), nil
 	}
-	if err := opencodeRefresher.RefreshIfEmpty(); err != nil && len(opencodeRefresher.Models()) == 0 {
+	if err := ensureModels(); err != nil {
 		return errorEnvelope("model_refresh_failed", err.Error()), nil
 	}
 	models := make([]map[string]interface{}, 0)
@@ -56,6 +63,9 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	authID, _ := req["AuthID"].(string)
 	if authID == "" {
 		return errorEnvelope("invalid_request", "missing auth_id"), nil
+	}
+	if err := ensureModels(); err != nil {
+		return errorEnvelope("model_refresh_failed", err.Error()), nil
 	}
 
 	alive := opencodeRefresher.Healthy()
