@@ -103,10 +103,11 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		return shared.OKEnvelope(modelStaticPayloadForScope(scope))
 	}
 
-	// Persist catalog into the auth blob for later reuse.
+	// Persist catalog into the auth blob; the host preserves original identity fields.
 	updated := store
 	updated.ModelCatalog, _ = json.Marshal(catalog)
-	auth := buildAuthData(updated, ProviderID, "nous-portal.json", "Nous Portal", nil)
+	storageJSON, _ := json.Marshal(updated)
+	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
 
 	return shared.OKEnvelope(shared.MustJSON(map[string]any{
 		"Provider":   ProviderID,

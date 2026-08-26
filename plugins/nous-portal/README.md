@@ -15,7 +15,7 @@ CLIProxyAPI plugin for [Nous Portal](https://portal.nousresearch.com) OAuth auth
 2. Plugin opens device-code flow at `https://portal.nousresearch.com`
 3. User completes authorization in browser
 4. Plugin polls token endpoint and stores credentials
-5. Credentials saved to `~/.cli-proxy-api/nous-portal.json`
+5. Credentials are saved as `nous-portal.json`, `nous-portal-2.json`, etc.; refresh preserves the account identity and file.
 
 ## Build
 
@@ -26,9 +26,11 @@ CGO_ENABLED=1 go build -buildmode=c-shared -o nous-portal.so .
 
 ## Deploy
 
+From the repository root:
+
 ```bash
-cp plugins/nous-portal/nous-portal.so ~/cliproxyapi/plugins/
-systemctl --user restart cliproxyapi.service
+make deploy
+systemctl --user restart cli-proxy-api.service
 ```
 
 ## Configuration
@@ -43,7 +45,12 @@ plugins:
       inference_base_url: "https://inference-api.nousresearch.com/v1"
       client_id: "hermes-cli"
       scope: "inference:invoke"
+      model_aliases:
+        fast-model: "google/gemini-3-flash-preview"
 ```
+Config values are bare upstream IDs. The client-facing alias is prefixed, for
+example `nous-portal/fast-model`. Configuration aliases override host
+`oauth-model-alias` entries and apply after `plugin.reconfigure` without restart.
 
 ## Model IDs
 
@@ -51,6 +58,13 @@ Models use the prefix `nous-portal/`:
 - `nous-portal/minimax/minimax-m2.5:free`
 - `nous-portal/google/gemini-3.7-flash`
 - `nous-portal/stepfun/step-3.7-flash:free`
+
+## Runtime Guarantees
+
+Model-specific failures quarantine after 3 failures for 15 minutes, with
+exponential backoff up to 1 hour; auth, rate-limit, provider-wide, 5xx, and
+caller errors do not quarantine models. SSE is buffered with 100,000-chunk,
+100 MiB total, and 1 MiB line limits; empty/read/limit failures are errors.
 
 ## Files
 

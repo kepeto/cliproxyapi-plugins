@@ -60,6 +60,20 @@ func resolveModelFromPayload(payload []byte) []byte {
 	return payload
 }
 
+func resolveStreamPayload(payload []byte) []byte {
+	resolved := resolveModelFromPayload(payload)
+	var root map[string]any
+	if json.Unmarshal(resolved, &root) != nil {
+		return resolved
+	}
+	root["stream"] = true
+	out, err := json.Marshal(root)
+	if err != nil {
+		return resolved
+	}
+	return out
+}
+
 // setPluginPrefix updates the runtime prefix from plugin config.
 func setPluginPrefix(prefix string) {
 	if prefix != "" {

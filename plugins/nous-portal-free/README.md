@@ -14,8 +14,9 @@ CLIProxyAPI plugin for Nous Portal free-tier models only.
 Same as `nous-portal`:
 1. User clicks "Login" in CPA dashboard
 2. Device-code flow opens at Nous Portal
-3. After authorization, credentials stored in `nous-portal-free.json`
-
+3. After authorization, credentials are stored as `nous-portal-free.json`,
+   `nous-portal-free-2.json`, etc.; refresh preserves the account, file, and
+   cached free catalog.
 ## Model Filtering
 
 Only models matching these criteria are shown:
@@ -36,9 +37,11 @@ CGO_ENABLED=1 go build -buildmode=c-shared -o nous-portal-free.so .
 
 ## Deploy
 
+From the repository root:
+
 ```bash
-cp plugins/nous-portal-free/nous-portal-free.so ~/cliproxyapi/plugins/
-systemctl --user restart cliproxyapi.service
+make deploy
+systemctl --user restart cli-proxy-api.service
 ```
 
 ## Configuration
@@ -53,13 +56,27 @@ plugins:
       inference_base_url: "https://inference-api.nousresearch.com/v1"
       client_id: "hermes-cli"
       scope: "inference:invoke"
+      model_aliases:
+        free-model: "minimax/minimax-m2.5:free"
 ```
+
+Config values are bare upstream IDs. The client-facing alias is prefixed, for
+example `nous-portal-free/free-model`; its target must be present in the live
+free catalog. Configuration aliases override host aliases and apply after
+`plugin.reconfigure` without restart.
 
 ## Model IDs
 
 Models use the prefix `nous-portal-free/`:
 - `nous-portal-free/minimax/minimax-m2.5:free`
 - `nous-portal-free/stepfun/step-3.7-flash:free`
+
+## Runtime Guarantees
+
+Model-specific failures quarantine after 3 failures for 15 minutes, with
+exponential backoff up to 1 hour; auth, rate-limit, provider-wide, 5xx, and
+caller errors do not quarantine models. SSE is buffered with 100,000-chunk,
+100 MiB total, and 1 MiB line limits; empty/read/limit failures are errors.
 
 ## Files
 

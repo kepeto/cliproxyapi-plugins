@@ -34,3 +34,6 @@ jobs:
 
       - name: Build and verify plugin ABI
         run: make verify
+
+      - name: Validate release registry generator
+        run: python3 scripts/test_generate_registry.py

@@ -100,6 +100,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	}
 
 	openaiReq := shared.ConvertToOpenAI(req, baseModelID, resolveModel)
+	openaiReq["stream"] = true
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil
@@ -123,30 +124,41 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+buf.String(), status), nil
 	}
 
-	// Drain the SSE stream and encode each raw chunk as base64 for the host envelope.
+	// Drain the SSE stream and encode each raw chunk for the host envelope.
+	const (
+		maxStreamChunks = 100000
+		maxStreamBytes  = 100 * 1024 * 1024
+	)
 	chunks := make([]map[string]any, 0)
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var totalBytes int
 	for scanner.Scan() {
+		if len(chunks) >= maxStreamChunks {
+			_ = reader.Close()
+			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
+		}
 		line := scanner.Text()
 		if line == "" || line[0] == ':' {
 			continue
 		}
 		line = strings.TrimPrefix(line, "data: ")
+		totalBytes += len(line) + 1
+		if totalBytes > maxStreamBytes {
+			_ = reader.Close()
+			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
+		}
 		chunks = append(chunks, map[string]any{"Payload": base64encode([]byte(line + "\n"))})
 	}
 	if err := scanner.Err(); err != nil {
-		modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
-		chunks = append(chunks, map[string]any{"Err": err.Error()})
+		_ = reader.Close()
+		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
-		modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
-		return errorEnvelope("upstream_error", "empty chat stream"), nil
+		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
-	if scanner.Err() == nil {
-		modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
-	}
+	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{
 		"Headers": map[string]any{
 			"content-type": []string{"text/event-stream"},
@@ -287,6 +299,7 @@ func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer public")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -300,43 +313,41 @@ func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
 
 // executeOpenCodeChatWithRetry retries on transient 502/503 errors.
 func executeOpenCodeChatWithRetry(payload []byte, stream bool) (int, []byte, error) {
-	const maxRetries = 3
-	backoff := 1 * time.Second
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		status, body, err := executeOpenCodeChat(payload, stream)
-		if err != nil {
+	const maxAttempts = 3
+	backoff := time.Second
+	var status int
+	var body []byte
+	var err error
+	for attempt := range maxAttempts {
+		status, body, err = executeOpenCodeChat(payload, stream)
+		if err != nil || status < 500 || status > 503 {
 			return status, body, err
 		}
-		if status < 500 || status > 503 {
-			return status, body, nil
-		}
-		if attempt < maxRetries-1 {
+		if attempt+1 < maxAttempts {
 			time.Sleep(backoff)
 			backoff *= 2
 		}
 	}
-	return executeOpenCodeChat(payload, stream)
+	return status, body, nil
 }
 
 // executeOpenCodeChatStreamWithRetry retries stream on transient 502/503 errors.
 func executeOpenCodeChatStreamWithRetry(payload []byte) (io.ReadCloser, int, error) {
-	const maxRetries = 3
-	backoff := 1 * time.Second
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		reader, status, err := executeOpenCodeChatStream(payload)
-		if err != nil {
-			return nil, status, err
-		}
-		if status < 500 || status > 503 {
-			return reader, status, nil
+	const maxAttempts = 3
+	backoff := time.Second
+	var reader io.ReadCloser
+	var status int
+	var err error
+	for attempt := range maxAttempts {
+		reader, status, err = executeOpenCodeChatStream(payload)
+		if err != nil || status < 500 || status > 503 {
+			return reader, status, err
 		}
 		_ = reader.Close()
-		if attempt < maxRetries-1 {
+		if attempt+1 < maxAttempts {
 			time.Sleep(backoff)
 			backoff *= 2
 		}
 	}
-	return executeOpenCodeChatStream(payload)
+	return reader, status, nil
 }

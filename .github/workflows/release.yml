@@ -17,6 +17,15 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "release workflow requires a semantic-version tag, got '$GITHUB_REF_NAME'" >&2
+            exit 1
+          fi
+
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -32,7 +41,7 @@ jobs:
           <!-- plugin-release-assets:start -->
           ## Release Assets
 
-          - `nous-portal_<version>_<os>_<arch>.zip` — `.so` plugin for Linux/macOS.
+          - `nous-portal_<version>_<os>_<arch>.zip` — `.so` Linux, `.dylib` macOS.
           - `nous-portal_<version>_windows_<arch>.zip` — `.dll` plugin for Windows.
           - `nous-portal-free_<version>_<os>_<arch>.zip` — free Nous Portal plugin.
           - `opencode-free_<version>_<os>_<arch>.zip` — OpenCode Zen free plugin.
@@ -105,7 +114,7 @@ jobs:
             runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: nous-portal
             plugin_dir: plugins/nous-portal
@@ -134,7 +143,7 @@ jobs:
             runner: macos-15
             goos: darwin
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: nous-portal
             plugin_dir: plugins/nous-portal
@@ -161,7 +170,7 @@ jobs:
             runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: nous-portal-free
             plugin_dir: plugins/nous-portal-free
@@ -190,7 +199,7 @@ jobs:
             runner: macos-15
             goos: darwin
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: nous-portal-free
             plugin_dir: plugins/nous-portal-free
@@ -217,7 +226,7 @@ jobs:
             runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: opencode-free
             plugin_dir: plugins/opencode-free
@@ -246,7 +255,7 @@ jobs:
             runner: macos-15
             goos: darwin
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: opencode-free
             plugin_dir: plugins/opencode-free
@@ -273,7 +282,7 @@ jobs:
             runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: kilo-free
             plugin_dir: plugins/kilo-free
@@ -302,7 +311,7 @@ jobs:
             runner: macos-15
             goos: darwin
             goarch: arm64
-            asset_arch: aarch64
+            asset_arch: arm64
             archive_format: zip
           - plugin: kilo-free
             plugin_dir: plugins/kilo-free
@@ -417,161 +426,28 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cd "$GITHUB_WORKSPACE/dist"
           gh release download "$GITHUB_REF_NAME" --pattern '*.tar.gz' --pattern '*.zip' --clobber
+
+      - name: Generate registry.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/generate_registry.py \
+            --tag "$GITHUB_REF_NAME" \
+            --version "${GITHUB_REF_NAME#v}" \
+            --dist "$GITHUB_WORKSPACE/dist" \
+            --output "$GITHUB_WORKSPACE/registry.json"
       - name: Generate checksums.txt
+        shell: bash
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/dist"
-          sha256sum *.zip > checksums.txt
+          sha256sum ./*.zip | sort > checksums.txt
       - name: Upload checksums.txt to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
-
-      - name: Generate registry.json
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        shell: bash
-        run: |
           set -euo pipefail
-          cat > "$GITHUB_WORKSPACE/registry.json" <<JSON
-          {
-            "schema_version": 1,
-            "plugins": [
-              {
-                "id": "nous-portal",
-                "name": "Nous Portal",
-                "description": "OAuth device-code authentication for Nous Portal inference API",
-                "author": "kepeto",
-                "version": "${RELEASE_VERSION#v}",
-                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-                "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
-                "homepage": "https://portal.nousresearch.com",
-                "license": "MIT",
-                "tags": ["nous", "portal", "oauth", "inference"],
-                "install": {
-                  "type": "github-release",
-                  "artifacts": [
-                    {
-                      "goos": "linux",
-                      "goarch": "amd64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_linux_amd64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null || echo '0')
-                    },
-                    {
-                      "goos": "linux",
-                      "goarch": "arm64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_linux_arm64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm64.zip" 2>/dev/null || echo '0')
-                    },
-                    {
-                      "goos": "linux",
-                      "goarch": "arm",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_linux_arm.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_linux_arm.zip" 2>/dev/null || echo '0')
-                    },
-                    {
-                      "goos": "darwin",
-                      "goarch": "amd64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_darwin_amd64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_amd64.zip" 2>/dev/null || echo '0')
-                    },
-                    {
-                      "goos": "darwin",
-                      "goarch": "arm64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_darwin_arm64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_arm64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_darwin_arm64.zip" 2>/dev/null || echo '0')
-                    },
-                    {
-                      "goos": "windows",
-                      "goarch": "amd64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal_${RELEASE_VERSION#v}_windows_amd64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_windows_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal_${RELEASE_VERSION#v}_windows_amd64.zip" 2>/dev/null || echo '0')
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "nous-portal-free",
-                "name": "Nous Portal Free",
-                "description": "Nous Portal free models plugin for CLIProxyAPI",
-                "author": "kepeto",
-                "version": "${RELEASE_VERSION#v}",
-                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-                "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
-                "homepage": "https://portal.nousresearch.com",
-                "license": "MIT",
-                "tags": ["nous", "portal", "free", "oauth"],
-                "install": {
-                  "type": "github-release",
-                  "artifacts": [
-                    {
-                      "goos": "linux",
-                      "goarch": "amd64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/nous-portal-free_${RELEASE_VERSION#v}_linux_amd64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/nous-portal-free_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/nous-portal-free_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null || echo '0')
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "opencode-free",
-                "name": "OpenCode Zen Free",
-                "description": "OpenCode Zen free models plugin for CLIProxyAPI",
-                "author": "kepeto",
-                "version": "${RELEASE_VERSION#v}",
-                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-                "logo": "https://opencode.ai/favicon.ico",
-                "homepage": "https://opencode.ai",
-                "license": "MIT",
-                "tags": ["opencode", "free", "zen"],
-                "install": {
-                  "type": "github-release",
-                  "artifacts": [
-                    {
-                      "goos": "linux",
-                      "goarch": "amd64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/opencode-free_${RELEASE_VERSION#v}_linux_amd64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/opencode-free_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/opencode-free_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null || echo '0')
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "kilo-free",
-                "name": "KiloCode Free",
-                "description": "KiloCode free models plugin for CLIProxyAPI",
-                "author": "kepeto",
-                "version": "${RELEASE_VERSION#v}",
-                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-                "logo": "https://kilo.ai/favicon.ico",
-                "homepage": "https://kilo.ai",
-                "license": "MIT",
-                "tags": ["kilo", "free", "kilo-code"],
-                "install": {
-                  "type": "github-release",
-                  "artifacts": [
-                    {
-                      "goos": "linux",
-                      "goarch": "amd64",
-                      "url": "https://github.com/kepeto/cliproxyapi-plugins/releases/download/${RELEASE_VERSION}/kilo-free_${RELEASE_VERSION#v}_linux_amd64.zip",
-                      "sha256": "$(sha256sum "$GITHUB_WORKSPACE/dist/kilo-free_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null | cut -d' ' -f1 || echo '')",
-                      "size": $(stat -c%s "$GITHUB_WORKSPACE/dist/kilo-free_${RELEASE_VERSION#v}_linux_amd64.zip" 2>/dev/null || echo '0')
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-          JSON
+          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
       - name: Upload registry to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -583,14 +459,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Save generated registry to avoid checkout conflict
           mv "$GITHUB_WORKSPACE/registry.json" /tmp/registry.json
           git checkout main
-          git pull origin main
+          git pull --ff-only origin main
           mv /tmp/registry.json "$GITHUB_WORKSPACE/registry.json"
-          
+
           git add registry.json
-          git commit -m "chore: update plugin store registry to ${RELEASE_VERSION}"
+          if git diff --cached --quiet -- registry.json; then
+            echo "registry.json is already current"
+            exit 0
+          fi
+          git commit -m "chore: update plugin store registry to ${GITHUB_REF_NAME#v}"
           git push origin main

@@ -41,7 +41,7 @@ func TestIsModelSpecificFailure(t *testing.T) {
 		body   string
 		want   bool
 	}{
-		{"transport", 0, "", true},
+		{"transport", 0, "", false},
 		{"unavailable", 400, `{"error":"model unavailable"}`, true},
 		{"auth", 401, `{"error":"model unavailable"}`, false},
 		{"rate limit", 429, "model unavailable", false},

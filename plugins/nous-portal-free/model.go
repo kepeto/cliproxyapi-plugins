@@ -11,63 +11,95 @@ import (
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
-// fallbackModels is a static, always-available catalog. Mirrors the upstream
-// provider's FALLBACK_MODEL_IDS so /v1/models works before any login completes.
+// fallbackModels is an audited static catalog of known free-tier IDs. It is
+// used only when the live catalog is unavailable or no login exists; paid
+// models must never enter this fallback path.
 var fallbackModels = []string{
-	"moonshotai/kimi-k2.6",
-	"xiaomi/mimo-v2.5-pro",
-	"xiaomi/mimo-v2.5",
-	"tencent/hy3-preview",
-	"anthropic/claude-opus-4.7",
-	"anthropic/claude-opus-4.6",
-	"anthropic/claude-sonnet-4.6",
-	"anthropic/claude-sonnet-4.5",
-	"anthropic/claude-haiku-4.5",
-	"openai/gpt-5.5",
-	"openai/gpt-5.4-mini",
-	"openai/gpt-5.3-codex",
-	"google/gemini-3-pro-preview",
-	"google/gemini-3-flash-preview",
-	"google/gemini-3.1-pro-preview",
-	"google/gemini-3.1-flash-lite-preview",
-	"qwen/qwen3.5-plus-02-15",
-	"qwen/qwen3.5-35b-a3b",
-	"stepfun/step-3.5-flash",
-	"minimax/minimax-m2.7",
-	"minimax/minimax-m2.5",
 	"minimax/minimax-m2.5:free",
-	"z-ai/glm-5.1",
-	"z-ai/glm-5v-turbo",
-	"z-ai/glm-5-turbo",
-	"x-ai/grok-4.20-beta",
-	"nvidia/nemotron-3-super-120b-a12b",
-	"arcee-ai/trinity-large-thinking",
-	"openai/gpt-5.5-pro",
-	"openai/gpt-5.4-nano",
+	"tencent/hy3:free",
+	"stepfun/step-3.7-flash:free",
+	"upstage/solar-pro4:free",
+	"meituan/longcat-2.0:free",
 }
 
 func modelStaticPayload() string {
-	return modelStaticPayloadForScope(nousHealthScope(storageJSON{InferenceBaseURL: defaultInferenceBaseURL}))
+	return modelStaticPayloadForScope(nousHealthScope(storageJSON{InferenceBaseURL: currentNousInferenceURL()}))
 }
 
 func modelStaticPayloadForScope(scope string) string {
-	models := make([]map[string]any, 0)
 	ids := nousRefresher.Models()
 	if len(ids) == 0 {
 		ids = fallbackModels
 	}
-	for _, id := range modelHealth.Filter(scope, ids) {
-		models = append(models, modelInfo(prefixedModelID(id), id))
+	return modelPayloadForIDs(scope, ids)
+}
+
+func fallbackModelPayload(scope string) string {
+	return modelPayloadForIDs(scope, fallbackModels)
+}
+
+func modelPayloadForIDs(scope string, ids []string) string {
+	models := make([]map[string]any, 0, len(ids))
+	allowed := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		allowed[id] = struct{}{}
+		if !modelHealth.Hidden(scope, id) {
+			models = append(models, modelInfo(prefixedModelID(id), id))
+		}
 	}
 	for alias, target := range modelAliases.Entries() {
-		if !modelHealth.Hidden(scope, target) {
-			models = append(models, modelInfo(prefixedModelID(alias), alias))
+		if _, ok := allowed[target]; !ok || modelHealth.Hidden(scope, target) {
+			continue
 		}
+		models = append(models, modelInfo(prefixedModelID(alias), alias))
 	}
 	return shared.MustJSON(map[string]any{
 		"Provider": ProviderID,
 		"Models":   models,
 	})
+}
+
+func cachedFreeModelIDs(store storageJSON) []string {
+	if len(store.ModelCatalog) == 0 {
+		return nil
+	}
+	var catalog []rawCatalogModel
+	if json.Unmarshal(store.ModelCatalog, &catalog) != nil {
+		return nil
+	}
+	free := filterFreeModels(catalog)
+	ids := make([]string, 0, len(free))
+	for _, model := range free {
+		if model.ID != "" {
+			ids = append(ids, model.ID)
+		}
+	}
+	return ids
+}
+
+func cachedModelPayload(store storageJSON, scope string) (string, bool) {
+	ids := cachedFreeModelIDs(store)
+	if len(ids) == 0 {
+		return "", false
+	}
+	return modelPayloadForIDs(scope, ids), true
+}
+
+func freeModelAllowed(store storageJSON, modelID string) bool {
+	if modelID == "" {
+		return false
+	}
+	for _, id := range cachedFreeModelIDs(store) {
+		if id == modelID {
+			return true
+		}
+	}
+	for _, id := range fallbackModels {
+		if id == modelID {
+			return true
+		}
+	}
+	return strings.HasSuffix(strings.ToLower(modelID), ":free")
 }
 
 // handleModelForAuth fetches the live catalog from the inference base URL and
@@ -85,34 +117,43 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		return shared.OKEnvelope(modelStaticPayload())
 	}
 
-	// Try to refresh from upstream if catalog is stale or missing.
+	scope := nousHealthScope(store)
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
 	if err != nil {
-		// Fallback to cached or static list.
-		return shared.OKEnvelope(modelStaticPayloadForScope(nousHealthScope(store)))
+		if cached, ok := cachedModelPayload(store, scope); ok {
+			return shared.OKEnvelope(cached)
+		}
+		return shared.OKEnvelope(fallbackModelPayload(scope))
 	}
 
 	freeModels := filterFreeModels(catalog)
-	scope := nousHealthScope(store)
+	allowed := make(map[string]struct{}, len(freeModels))
 	models := make([]map[string]any, 0, len(freeModels))
 	for _, m := range freeModels {
+		allowed[m.ID] = struct{}{}
 		if !modelHealth.Hidden(scope, m.ID) {
 			models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
 		}
 	}
 	for alias, target := range modelAliases.Entries() {
-		if !modelHealth.Hidden(scope, target) {
-			models = append(models, modelInfo(prefixedModelID(alias), alias))
+		if _, ok := allowed[target]; !ok || modelHealth.Hidden(scope, target) {
+			continue
 		}
+		models = append(models, modelInfo(prefixedModelID(alias), alias))
 	}
 	if len(models) == 0 {
-		return shared.OKEnvelope(modelStaticPayloadForScope(scope))
+		if cached, ok := cachedModelPayload(store, scope); ok {
+			return shared.OKEnvelope(cached)
+		}
+		return shared.OKEnvelope(fallbackModelPayload(scope))
 	}
 
-	// Persist catalog into the auth blob for later reuse.
+	// Persist catalog into the auth blob for later reuse. The host merges
+	// missing identity fields from the original auth record.
 	updated := store
 	updated.ModelCatalog, _ = json.Marshal(freeModels)
-	auth := buildAuthData(updated, ProviderID, "nous-portal-free.json", "Nous Portal Free", nil)
+	storageJSON, _ := json.Marshal(updated)
+	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
 
 	return shared.OKEnvelope(shared.MustJSON(map[string]any{
 		"Provider":   ProviderID,
@@ -122,13 +163,23 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 }
 
 func filterFreeModels(catalog []rawCatalogModel) []rawCatalogModel {
-	freeModels := make([]rawCatalogModel, 0)
+	freeModels := make([]rawCatalogModel, 0, len(catalog))
+	seen := make(map[string]struct{}, len(catalog))
 	for _, m := range catalog {
-		id := strings.ToLower(m.ID)
-		name := strings.ToLower(m.Name)
-		if strings.Contains(id, "free") || strings.Contains(name, "free") {
-			freeModels = append(freeModels, m)
+		m.ID = strings.TrimSpace(m.ID)
+		if m.ID == "" {
+			continue
 		}
+		id := strings.ToLower(m.ID)
+		name := strings.ToLower(strings.TrimSpace(m.Name))
+		if !strings.HasSuffix(id, ":free") && !strings.Contains(name, "free") {
+			continue
+		}
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		seen[m.ID] = struct{}{}
+		freeModels = append(freeModels, m)
 	}
 	return freeModels
 }

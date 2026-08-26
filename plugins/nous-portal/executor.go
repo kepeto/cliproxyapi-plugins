@@ -45,6 +45,9 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
 	}
 	if status != 200 {
+		if status == 401 || status == 403 {
+			return errorEnvelopeWithStatus("auth_required", "nous-portal credential rejected", status), nil
+		}
 		if shared.IsModelSpecificFailure(status, body, nil) {
 			modelHealth.RecordFailure(scope, modelID)
 		}
@@ -84,7 +87,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
-	reader, status, headers, err := shared.DoChatStream(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
+	reader, status, headers, err := shared.DoChatStream(url, store.AccessToken, shared.InjectNousPortalTags(resolveStreamPayload(req.Payload)))
 	if err != nil {
 		if shared.IsModelSpecificFailure(status, nil, err) {
 			modelHealth.RecordFailure(scope, modelID)
@@ -92,6 +95,10 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		return errorEnvelope("executor_stream_failed", err.Error()), nil
 	}
 	if status != 200 {
+		if status == 401 || status == 403 {
+			_ = reader.Close()
+			return errorEnvelopeWithStatus("auth_required", "nous-portal credential rejected", status), nil
+		}
 		buf := new(bytes.Buffer)
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
@@ -114,7 +121,6 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
-			modelHealth.RecordFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -125,19 +131,16 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
-			modelHealth.RecordFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
-		modelHealth.RecordFailure(scope, modelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
-		modelHealth.RecordFailure(scope, modelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
 	modelHealth.RecordSuccess(scope, modelID)

@@ -65,3 +65,48 @@ func TestRefreshIfEmptyWaitsForInflightRefresh(t *testing.T) {
 		t.Fatalf("unexpected models: %#v", models)
 	}
 }
+
+func TestModelRefresherStopIsIdempotentAndWaits(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	refresher := NewModelRefresher(time.Hour, func() ([]string, error) {
+		calls.Add(1)
+		close(started)
+		<-release
+		return []string{"model-a"}, nil
+	}, nil)
+
+	refresher.Start()
+	refresher.Start()
+	<-started
+	stopped := make(chan struct{})
+	go func() {
+		refresher.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before the in-flight fetch completed")
+	default:
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not wait for the refresher goroutine")
+	}
+	refresher.Stop()
+	refresher.Start()
+	if calls.Load() != 1 {
+		t.Fatalf("fetch calls = %d, want one lifecycle start", calls.Load())
+	}
+
+	beforeStart := NewModelRefresher(time.Hour, func() ([]string, error) {
+		t.Fatal("stopped-before-start refresher fetched")
+		return nil, nil
+	}, nil)
+	beforeStart.Stop()
+	beforeStart.Start()
+	beforeStart.Stop()
+}

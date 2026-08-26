@@ -169,7 +169,7 @@ func healthKey(scope, model string) string { return scope + "\x00" + model }
 // and caller errors are intentionally excluded.
 func IsModelSpecificFailure(status int, body []byte, err error) bool {
 	if err != nil {
-		return true
+		return status == 408
 	}
 	if status == 408 {
 		return true

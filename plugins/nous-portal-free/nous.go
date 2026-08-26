@@ -43,17 +43,18 @@ type tokenResponse struct {
 
 // loginState is kept between auth.login.start and auth.login.poll.
 type loginState struct {
-	deviceCode       string
-	verificationURI  string
-	userCode         string
-	expiresAt        time.Time
-	interval         int
-	portalBaseURL    string
-	inferenceBaseURL string
-	clientID         string
-	scope            string
-	createdAt        time.Time
-	accountFileName  string // unique filename for multi-account support
+	deviceCode               string
+	verificationURI          string
+	userCode                 string
+	expiresAt                time.Time
+	interval                 int
+	portalBaseURL            string
+	inferenceBaseURL         string
+	inferenceBaseURLExplicit bool
+	clientID                 string
+	scope                    string
+	createdAt                time.Time
+	accountFileName          string // unique filename for multi-account support
 }
 
 // authStateStore holds in-progress login flows keyed by opaque state token.
@@ -155,9 +156,10 @@ func applyHostAliases(raw []byte) {
 	}
 }
 
-// applyConfig applies the host-forwarded config subtree (prefix, aliases).
+// applyConfig applies the host-forwarded config subtree (endpoint, prefix, aliases).
 func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
+	setNousInferenceURL(cfg.inferenceBaseURL())
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
 }
@@ -176,6 +178,31 @@ var nousRefresher = shared.NewModelRefresher(
 	healthCheckNous,
 )
 
+var (
+	nousEndpointMu   sync.RWMutex
+	nousInferenceURL = defaultInferenceBaseURL
+)
+
+func currentNousInferenceURL() string {
+	nousEndpointMu.RLock()
+	defer nousEndpointMu.RUnlock()
+	return nousInferenceURL
+}
+
+func setNousInferenceURL(url string) {
+	url = trimHTTP(url)
+	if url == "" {
+		url = defaultInferenceBaseURL
+	}
+	nousEndpointMu.Lock()
+	changed := nousInferenceURL != url
+	nousInferenceURL = url
+	nousEndpointMu.Unlock()
+	if changed {
+		nousRefresher.Reset()
+	}
+}
+
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
 var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
@@ -186,10 +213,7 @@ func init() {
 
 // fetchNousModels retrieves the current free model list from Nous Portal.
 func fetchNousModels() ([]string, error) {
-	store := storageJSON{
-		InferenceBaseURL: defaultInferenceBaseURL,
-	}
-	catalog, err := fetchModelCatalog(store.InferenceBaseURL, "")
+	catalog, err := fetchModelCatalog(currentNousInferenceURL(), "")
 	if err != nil {
 		return nil, err
 	}
@@ -206,10 +230,7 @@ func fetchNousModels() ([]string, error) {
 
 // healthCheckNous checks if Nous Portal /models endpoint is alive.
 func healthCheckNous() bool {
-	store := storageJSON{
-		InferenceBaseURL: defaultInferenceBaseURL,
-	}
-	_, err := fetchModelCatalog(store.InferenceBaseURL, "")
+	_, err := fetchModelCatalog(currentNousInferenceURL(), "")
 	return err == nil
 }
 
@@ -225,15 +246,20 @@ func nousHealthScope(store storageJSON) string {
 type storageJSON struct {
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`
-	ExpiresAt        time.Time `json:"expires_at"`
+	ExpiresAt        time.Time `json:"expires_at,omitzero"`
 	PortalBaseURL    string    `json:"portal_base_url"`
 	InferenceBaseURL string    `json:"inference_base_url"`
 	ClientID         string    `json:"client_id"`
 	Scope            string    `json:"scope"`
 	AccountID        string    `json:"account_id,omitempty"`
+	FileName         string    `json:"file_name,omitempty"`
 	ModelCatalog     []byte    `json:"model_catalog,omitempty"`
 }
 
-func (s storageJSON) valid() bool {
+func (s storageJSON) structuralValid() bool {
 	return s.AccessToken != "" && s.InferenceBaseURL != ""
+}
+
+func (s storageJSON) valid() bool {
+	return s.structuralValid() && (s.ExpiresAt.IsZero() || time.Now().Before(s.ExpiresAt))
 }

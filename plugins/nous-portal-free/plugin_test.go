@@ -2,7 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
 func TestRegisterPayload(t *testing.T) {
@@ -86,4 +91,276 @@ func TestStripModelPrefix(t *testing.T) {
 	if got != "tencent/hy3:free" {
 		t.Errorf("stripModelPrefix() = %q, want %q", got, "tencent/hy3:free")
 	}
+}
+
+func TestFreeFallbackCatalogAndAliasSafety(t *testing.T) {
+	originalRefresher := nousRefresher
+	defer func() {
+		nousRefresher = originalRefresher
+		modelAliases.SetConfig(nil)
+		modelAliases.SetHost(nil)
+	}()
+	nousRefresher = shared.NewModelRefresher(time.Hour, nil, nil)
+	modelAliases.SetConfig(map[string]string{
+		"paid-alias": "openai/gpt-5.5",
+		"free-alias": fallbackModels[0],
+	})
+
+	var payload struct {
+		Provider string `json:"Provider"`
+		Models   []struct {
+			ID string `json:"ID"`
+		} `json:"Models"`
+	}
+	if err := json.Unmarshal([]byte(modelStaticPayload()), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Provider != ProviderID {
+		t.Fatalf("Provider = %q, want %q", payload.Provider, ProviderID)
+	}
+	if len(payload.Models) != len(fallbackModels)+1 {
+		t.Fatalf("Models = %d, want %d", len(payload.Models), len(fallbackModels)+1)
+	}
+	seenAlias := false
+	for _, model := range payload.Models {
+		id := stripModelPrefix(model.ID)
+		if id == "paid-alias" {
+			t.Fatal("paid alias leaked into free catalog")
+		}
+		if id == "free-alias" {
+			seenAlias = true
+			continue
+		}
+		found := false
+		for _, fallback := range fallbackModels {
+			if id == fallback {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("unexpected fallback model %q", id)
+		}
+	}
+	if !seenAlias {
+		t.Fatal("free alias missing from catalog")
+	}
+}
+
+func TestFilterFreeModelsStrictAndDeduplicates(t *testing.T) {
+	got := filterFreeModels([]rawCatalogModel{
+		{ID: "provider/freebird"},
+		{ID: "provider/model:free"},
+		{ID: "provider/model:free"},
+		{ID: "provider/paid", Name: "Free tier"},
+		{ID: "provider/paid-name", Name: "Paid model"},
+		{ID: "", Name: "Free model"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("filtered models = %#v, want two documented free matches", got)
+	}
+	if got[0].ID != "provider/model:free" || got[1].ID != "provider/paid" {
+		t.Fatalf("unexpected filtered models: %#v", got)
+	}
+}
+
+func TestModelForAuthUsesFilteredCacheOnFetchError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	cache, err := json.Marshal([]rawCatalogModel{
+		{ID: "cached/model:free"},
+		{ID: "paid/model"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storageJSON{
+		AccessToken:      "token",
+		InferenceBaseURL: server.URL,
+		AccountID:        "account-a",
+		ModelCatalog:     cache,
+	}
+	storage, err := json.Marshal(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"StorageJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, _ := handleModelForAuth(request)
+	var envelope struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Models     []map[string]any `json:"Models"`
+			AuthUpdate json.RawMessage  `json:"AuthUpdate"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.OK || len(envelope.Result.Models) != 1 {
+		t.Fatalf("unexpected cached fallback response: %s", response)
+	}
+	if len(envelope.Result.AuthUpdate) != 0 {
+		t.Fatal("fetch failure emitted destructive AuthUpdate")
+	}
+	if envelope.Result.Models[0]["ID"] != prefixedModelID("cached/model:free") {
+		t.Fatalf("unexpected cached model: %#v", envelope.Result.Models[0])
+	}
+}
+
+func TestNousFreeReconfigureRetargetsRefresher(t *testing.T) {
+	originalURL := currentNousInferenceURL()
+	originalRefresher := nousRefresher
+	defer func() {
+		nousRefresher = originalRefresher
+		setNousInferenceURL(originalURL)
+	}()
+	nousRefresher = shared.NewModelRefresher(time.Hour, nil, nil)
+
+	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\n"))
+	if got := currentNousInferenceURL(); got != "https://example.test/custom/v1" {
+		t.Fatalf("currentNousInferenceURL() = %q", got)
+	}
+	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\n"))
+	if got := currentNousInferenceURL(); got != "https://example.test/custom/v1" {
+		t.Fatalf("idempotent endpoint update changed URL: %q", got)
+	}
+}
+
+func TestAuthRefreshPreservesCatalogAndStoredEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-token","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	cache, err := json.Marshal([]rawCatalogModel{{ID: "cached/model:free"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storageJSON{
+		AccessToken:      "old-token",
+		RefreshToken:     "refresh-token",
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL + "/v1",
+		AccountID:        "account-a",
+		ModelCatalog:     cache,
+	}
+	storage, err := json.Marshal(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{
+		"AuthID":      "account-a",
+		"StorageJSON": storage,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, _ := handleAuthRefresh(request)
+	var envelope struct {
+		Result struct {
+			Auth struct {
+				StorageJSON []byte `json:"StorageJSON"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := decodeStorage(envelope.Result.Auth.StorageJSON)
+	if refreshed.InferenceBaseURL != store.InferenceBaseURL {
+		t.Fatalf("refresh changed stored endpoint to %q", refreshed.InferenceBaseURL)
+	}
+	if string(refreshed.ModelCatalog) != string(store.ModelCatalog) {
+		t.Fatalf("refresh dropped model catalog: %q", refreshed.ModelCatalog)
+	}
+}
+
+func TestAuthParsePreservesExpiredAccountIdentity(t *testing.T) {
+	fileName := "nous-portal-free-2.json"
+	storage, err := json.Marshal(map[string]any{
+		"type":               ProviderID,
+		"access_token":       "expired-token",
+		"refresh_token":      "refresh-token",
+		"expires_at":         time.Now().Add(-time.Hour),
+		"inference_base_url": "https://example.test/v1",
+		"account_id":         "account-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"FileName": fileName, "RawJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthParse(request)
+	var result struct {
+		Result struct {
+			Handled bool `json:"Handled"`
+			Auth    struct {
+				ID       string `json:"ID"`
+				FileName string `json:"FileName"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Result.Handled || result.Result.Auth.ID != "account-2" || result.Result.Auth.FileName != fileName {
+		t.Fatalf("unexpected expired auth parse: %s", response)
+	}
+}
+
+func TestExpiredStorageIsStructuralButNotUsable(t *testing.T) {
+	storage := storageJSON{
+		AccessToken:      "expired",
+		InferenceBaseURL: "https://example.test/v1",
+		ExpiresAt:        time.Now().Add(-time.Minute),
+	}
+	if !storage.structuralValid() || storage.valid() {
+		t.Fatalf("unexpected expired storage validity: %#v", storage)
+	}
+}
+
+func TestFreeModelAllowedUsesFilteredSources(t *testing.T) {
+	cache, err := json.Marshal([]rawCatalogModel{{ID: "cached/model:free"}, {ID: "paid/model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storageJSON{ModelCatalog: cache}
+	if !freeModelAllowed(store, "cached/model:free") {
+		t.Fatal("cached free model rejected")
+	}
+	if freeModelAllowed(store, "paid/model") {
+		t.Fatal("paid model accepted")
+	}
+	if !freeModelAllowed(storageJSON{}, fallbackModels[0]) {
+		t.Fatal("audited fallback model rejected")
+	}
+	if freeModelAllowed(storageJSON{}, "provider/paid") {
+		t.Fatal("unlisted model accepted")
+	}
+}
+
+func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(registerPayload()), &root); err != nil {
+		t.Fatal(err)
+	}
+	metadata := root["metadata"].(map[string]any)
+	for _, raw := range metadata["ConfigFields"].([]any) {
+		field := raw.(map[string]any)
+		if field["Name"] == "model_aliases" && field["Type"] == "object" {
+			return
+		}
+	}
+	t.Fatal("model_aliases ConfigField missing")
 }

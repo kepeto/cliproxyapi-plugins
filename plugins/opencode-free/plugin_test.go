@@ -207,3 +207,51 @@ func TestResolveConfigYAML(t *testing.T) {
 		t.Fatalf("model_aliases not parsed from YAML: %v", cfg.ModelAliases)
 	}
 }
+
+func TestExecutorStreamForcesSSE(t *testing.T) {
+	originalRefresher := opencodeRefresher
+	originalChatURL := currentOpenCodeChatURL()
+	defer func() {
+		opencodeRefresher = originalRefresher
+		endpointMu.Lock()
+		opencodeChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+	var streamValue bool
+	var accept string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accept = r.Header.Get("Accept")
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		streamValue, _ = payload["stream"].(bool)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {}\n\n"))
+	}))
+	defer server.Close()
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"example-free"}, nil
+	}, nil)
+	endpointMu.Lock()
+	opencodeChatURL = server.URL
+	endpointMu.Unlock()
+
+	response, _ := handleExecutorExecuteStream([]byte(`{"Model":"example-free","Messages":[]}`))
+	if !strings.Contains(string(response), `"Chunks"`) || accept != "text/event-stream" || !streamValue {
+		t.Fatalf("stream request not normalized: response=%s accept=%q stream=%v", response, accept, streamValue)
+	}
+}
+
+func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(registerPayload()), &root); err != nil {
+		t.Fatal(err)
+	}
+	metadata := root["metadata"].(map[string]any)
+	for _, raw := range metadata["ConfigFields"].([]any) {
+		field := raw.(map[string]any)
+		if field["Name"] == "model_aliases" && field["Type"] == "object" {
+			return
+		}
+	}
+	t.Fatal("model_aliases ConfigField missing")
+}

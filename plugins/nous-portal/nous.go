@@ -42,17 +42,18 @@ type tokenResponse struct {
 
 // loginState is kept between auth.login.start and auth.login.poll.
 type loginState struct {
-	deviceCode       string
-	verificationURI  string
-	userCode         string
-	expiresAt        time.Time
-	interval         int
-	portalBaseURL    string
-	inferenceBaseURL string
-	clientID         string
-	scope            string
-	createdAt        time.Time
-	accountFileName  string // unique filename for multi-account support
+	deviceCode               string
+	verificationURI          string
+	userCode                 string
+	expiresAt                time.Time
+	interval                 int
+	portalBaseURL            string
+	inferenceBaseURL         string
+	inferenceBaseURLExplicit bool
+	clientID                 string
+	scope                    string
+	createdAt                time.Time
+	accountFileName          string // unique filename for multi-account support
 }
 
 // authStateStore holds in-progress login flows keyed by opaque state token.
@@ -184,15 +185,20 @@ func nousHealthScope(store storageJSON) string {
 type storageJSON struct {
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`
-	ExpiresAt        time.Time `json:"expires_at"`
+	ExpiresAt        time.Time `json:"expires_at,omitzero"`
 	PortalBaseURL    string    `json:"portal_base_url"`
 	InferenceBaseURL string    `json:"inference_base_url"`
 	ClientID         string    `json:"client_id"`
 	Scope            string    `json:"scope"`
 	AccountID        string    `json:"account_id,omitempty"`
+	FileName         string    `json:"file_name,omitempty"`
 	ModelCatalog     []byte    `json:"model_catalog,omitempty"`
 }
 
-func (s storageJSON) valid() bool {
+func (s storageJSON) structuralValid() bool {
 	return s.AccessToken != "" && s.InferenceBaseURL != ""
+}
+
+func (s storageJSON) valid() bool {
+	return s.structuralValid() && (s.ExpiresAt.IsZero() || time.Now().Before(s.ExpiresAt))
 }

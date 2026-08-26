@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
@@ -144,4 +145,65 @@ func TestPrefixSetAndGet(t *testing.T) {
 	if got != "new-test/model" {
 		t.Errorf("Prefix.Prefixed() = %q, want %q", got, "new-test/model")
 	}
+}
+
+func TestAuthParsePreservesExpiredAccountIdentity(t *testing.T) {
+	fileName := "nous-portal-2.json"
+	storage, err := json.Marshal(map[string]any{
+		"type":               ProviderID,
+		"access_token":       "expired-token",
+		"refresh_token":      "refresh-token",
+		"expires_at":         time.Now().Add(-time.Hour),
+		"inference_base_url": "https://example.test/v1",
+		"account_id":         "account-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"FileName": fileName, "RawJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthParse(request)
+	var result struct {
+		Result struct {
+			Handled bool `json:"Handled"`
+			Auth    struct {
+				ID       string `json:"ID"`
+				FileName string `json:"FileName"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Result.Handled || result.Result.Auth.ID != "account-2" || result.Result.Auth.FileName != fileName {
+		t.Fatalf("unexpected expired auth parse: %s", response)
+	}
+}
+
+func TestExpiredStorageIsStructuralButNotUsable(t *testing.T) {
+	storage := storageJSON{
+		AccessToken:      "expired",
+		InferenceBaseURL: "https://example.test/v1",
+		ExpiresAt:        time.Now().Add(-time.Minute),
+	}
+	if !storage.structuralValid() || storage.valid() {
+		t.Fatalf("unexpected expired storage validity: %#v", storage)
+	}
+}
+
+func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(registerPayload()), &root); err != nil {
+		t.Fatal(err)
+	}
+	metadata := root["metadata"].(map[string]any)
+	for _, raw := range metadata["ConfigFields"].([]any) {
+		field := raw.(map[string]any)
+		if field["Name"] == "model_aliases" && field["Type"] == "object" {
+			return
+		}
+	}
+	t.Fatal("model_aliases ConfigField missing")
 }

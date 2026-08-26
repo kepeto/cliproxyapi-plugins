@@ -7,30 +7,33 @@ import "fmt"
 #include <stdlib.h>
 
 typedef struct {
-	uint32_t abi_version;
-	void (*call)(void *call_ctx, const char *method, const uint8_t *payload, size_t payload_len, uint8_t **out, size_t *out_len);
-	void (*free_buffer)(void *call_ctx, void *ptr, size_t len);
-	void (*shutdown)(void);
-} cliproxy_plugin_api;
-
-typedef struct {
-	void *call_ctx;
-	int (*call)(void *call_ctx, const char *method, const uint8_t *payload, size_t payload_len, uint8_t **out, size_t *out_len);
-	void (*free)(void *call_ctx, void *ptr, size_t len);
-	void (*log)(void *call_ctx, const char *level, const char *message);
-} cliproxy_host_api;
-
-typedef struct {
-	uint8_t *ptr;
+	void* ptr;
 	size_t len;
 } cliproxy_buffer;
 
-typedef int (*cliproxy_plugin_init_fn)(const cliproxy_host_api *host, cliproxy_plugin_api *plugin);
-typedef int (*cliproxy_plugin_call_fn)(const char *method, const uint8_t *payload, size_t payload_len, cliproxy_buffer *response);
-typedef void (*cliproxy_plugin_free_fn)(void *ptr, size_t len);
+typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_host_free_fn)(void*, size_t);
+
+typedef struct {
+	uint32_t abi_version;
+	void* host_ctx;
+	cliproxy_host_call_fn call;
+	cliproxy_host_free_fn free_buffer;
+} cliproxy_host_api;
+
+typedef int (*cliproxy_plugin_call_fn)(const char*, const uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_plugin_free_fn)(void*, size_t);
 typedef void (*cliproxy_plugin_shutdown_fn)(void);
 
+typedef struct {
+	uint32_t abi_version;
+	cliproxy_plugin_call_fn call;
+	cliproxy_plugin_free_fn free_buffer;
+	cliproxy_plugin_shutdown_fn shutdown;
+} cliproxy_plugin_api;
+
 extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
+extern int cliproxy_plugin_call_bridge(const char*, const uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
 */
@@ -55,7 +58,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 		return 1
 	}
 	plugin.abi_version = C.uint32_t(abiVersion)
-	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
+	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxy_plugin_call_bridge)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
 	plugin.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
 	return 0
@@ -86,7 +89,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
-	// nothing to clean up currently
+	kiloRefresher.Stop()
 }
 
 func copyCBuffer(ptr *C.uint8_t, length C.size_t) []byte {
@@ -164,6 +167,7 @@ func registerPayload() string {
       {"Name": "kilo_chat_url", "Type": "string", "Description": "KiloCode chat completions URL (default https://api.kilo.ai/api/gateway/v1/chat/completions)"},
       {"Name": "kilo_models_url", "Type": "string", "Description": "KiloCode models URL (default https://api.kilo.ai/api/gateway/models)"},
       {"Name": "kilo_base_url", "Type": "string", "Description": "Legacy base URL; derives /v1/chat/completions and /models when explicit URLs are not set"},
+      {"Name": "model_aliases", "Type": "object", "Description": "Client-visible model alias to upstream model ID map"},
       {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default kilo-free)"}
     ]
   },
@@ -200,6 +204,6 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	}
 	slice := (*[1 << 30]byte)(ptr)[:len(raw):len(raw)]
 	copy(slice, raw)
-	response.ptr = (*C.uint8_t)(ptr)
+	response.ptr = ptr
 	response.len = C.size_t(len(raw))
 }

@@ -97,6 +97,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	}
 
 	openaiReq := shared.ConvertToOpenAI(req, baseModelID, resolveModel)
+	openaiReq["stream"] = true
 	payload, err := json.Marshal(openaiReq)
 	if err != nil {
 		return errorEnvelope("invalid_request", "marshal error"), nil
@@ -132,7 +133,6 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
-			modelHealth.RecordFailure(kiloHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -143,19 +143,16 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
-			modelHealth.RecordFailure(kiloHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
-		modelHealth.RecordFailure(kiloHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
-		modelHealth.RecordFailure(kiloHealthScope(), baseModelID)
 		return errorEnvelope("upstream_error", "empty chat stream"), nil
 	}
 	modelHealth.RecordSuccess(kiloHealthScope(), baseModelID)
@@ -201,6 +198,7 @@ func executeKiloChatStream(payload []byte) (io.ReadCloser, int, error) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	req.Header.Set("Accept", "text/event-stream")
 	client := &http.Client{Transport: streamTransport}
 	resp, err := client.Do(req)
 	if err != nil {

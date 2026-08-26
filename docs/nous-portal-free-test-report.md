@@ -1,5 +1,10 @@
 # CPA Plugin Test Report: `nous-portal-free` → `tencent/hy3:free`
 
+> Historical integration report from 2026-08-19 for plugin v0.1.16. Current
+> releases use ldflags-injected versions, expiry-aware OAuth storage, live
+> catalog refresh, and the version-safe deployment flow; retain the measurements
+> below as historical evidence only.
+
 **Date:** 2026-08-19 (WIB)
 **Gateway:** local CLIProxyAPI `http://localhost:8317` (api-key `mipu`)
 **Plugin:** `nous-portal-free` v0.1.16

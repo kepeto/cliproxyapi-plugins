@@ -11,17 +11,17 @@ CLIProxyAPI plugin for [OpenCode Zen](https://opencode.ai) free-tier models.
 
 ## Auth Flow
 
-No OAuth needed. Plugin returns a dummy auth response; executor sends requests directly to upstream without credentials.
+- No OAuth is required. The plugin creates a local keyless profile and sends
+  `Authorization: Bearer public` to the OpenCode chat endpoint.
 
 ## Model Catalog
 
 The plugin refreshes the free model catalog from the configured upstream
-`/models` endpoint. The catalog is cached and refreshed periodically, so new
-upstream models can become available without rebuilding the plugin. If the
-upstream endpoint is unavailable and no cached catalog exists, the plugin
-returns a model-refresh error. Models that repeatedly fail model-specific
-inference are temporarily quarantined and automatically retried after the
-cooldown.
+`/v1/models` endpoint. The catalog is held in memory and refreshed periodically;
+new upstream models can become available without rebuilding the plugin. OpenCode
+has no static fallback: an unavailable empty catalog returns a model-refresh
+error. Models that repeatedly fail model-specific inference are temporarily
+quarantined and automatically retried after the cooldown.
 
 ## Build
 
@@ -32,8 +32,10 @@ CGO_ENABLED=1 go build -buildmode=c-shared -o opencode-free.so .
 
 ## Deploy
 
+From the repository root:
+
 ```bash
-cp plugins/opencode-free/opencode-free.so ~/.cli-proxy-api/plugins/
+make deploy
 systemctl --user restart cli-proxy-api.service
 ```
 
@@ -51,17 +53,25 @@ plugins:
       # opencode_models_url: "https://opencode.ai/zen/v1/models"
       # Optional: client-visible alias -> upstream model ID.
       model_aliases:
-        ox-alpha: "x-preview-f-free"
+        deep-free: "deepseek-v4-flash-free"
 ```
 
-Aliases appear in `/v1/models` alongside the live catalog; requests to an
-alias are routed to its upstream model. Applied on hot reload via
-`plugin.reconfigure` — no restart needed.
+Aliases appear in `/v1/models` alongside configured entries; their targets must
+exist in the current live catalog. They use the active prefix, for example
+`opencode-free/deep-free`, while config values remain bare upstream IDs.
+`plugin.reconfigure` applies alias changes without restart.
 
 ## Upstream Endpoint
 
 - Chat: `https://opencode.ai/zen/v1/chat/completions`
-- Models: Dynamic catalog from the configured upstream `/models` endpoint
+- Models: `https://opencode.ai/zen/v1/models`
+
+## Runtime Guarantees
+
+Model-specific failures quarantine after 3 failures for 15 minutes, with
+exponential backoff up to 1 hour; auth, rate-limit, provider-wide, 5xx, and
+caller errors do not quarantine models. SSE is buffered with 100,000-chunk,
+100 MiB total, and 1 MiB line limits; empty/read/limit failures are errors.
 
 ## Files
 

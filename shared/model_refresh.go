@@ -9,6 +9,7 @@ import (
 type ModelRefresher struct {
 	mu            sync.RWMutex
 	refreshMu     sync.Mutex
+	lifecycleMu   sync.Mutex
 	models        []string
 	lastRefresh   time.Time
 	interval      time.Duration
@@ -16,6 +17,9 @@ type ModelRefresher struct {
 	fetch         func() ([]string, error)
 	healthCheck   func() bool
 	stopCh        chan struct{}
+	doneCh        chan struct{}
+	started       bool
+	stopped       bool
 }
 
 // NewModelRefresher creates a refresher with the given interval and fetch function.
@@ -40,17 +44,39 @@ func NewModelRefresher(interval time.Duration, fetch func() ([]string, error), h
 // Start begins the periodic refresh loop in a background goroutine.
 // It performs an immediate first refresh, then repeats every interval.
 func (r *ModelRefresher) Start() {
+	r.lifecycleMu.Lock()
+	if r.started || r.stopped {
+		r.lifecycleMu.Unlock()
+		return
+	}
+	r.started = true
+	r.doneCh = make(chan struct{})
+	stopCh := r.stopCh
+	doneCh := r.doneCh
+	r.lifecycleMu.Unlock()
+
 	go func() {
+		defer close(doneCh)
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
 		_ = r.Refresh()
 		ticker := time.NewTicker(r.nextInterval())
 		defer ticker.Stop()
 		for {
 			select {
+			case <-stopCh:
+				return
 			case <-ticker.C:
+				select {
+				case <-stopCh:
+					return
+				default:
+				}
 				_ = r.Refresh()
 				ticker.Reset(r.nextInterval())
-			case <-r.stopCh:
-				return
 			}
 		}
 	}()
@@ -69,9 +95,23 @@ func (r *ModelRefresher) nextInterval() time.Duration {
 	return r.interval
 }
 
-// Stop halts the background refresh loop.
+// Stop halts the background refresh loop and waits for an in-flight fetch.
+// It is safe to call multiple times; a stopped refresher cannot be restarted.
 func (r *ModelRefresher) Stop() {
+	r.lifecycleMu.Lock()
+	if r.stopped {
+		r.lifecycleMu.Unlock()
+		return
+	}
+	r.stopped = true
+	if !r.started {
+		r.lifecycleMu.Unlock()
+		return
+	}
 	close(r.stopCh)
+	doneCh := r.doneCh
+	r.lifecycleMu.Unlock()
+	<-doneCh
 }
 
 // Reset discards the current catalog so the next ensure call fetches it again.

@@ -31,6 +31,7 @@ typedef struct {
 } cliproxy_plugin_api;
 
 extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
+extern int cliproxy_plugin_call_bridge(const char*, const uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
 
@@ -78,7 +79,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	}
 	C.store_host_api(host)
 	plugin.abi_version = C.uint32_t(abiVersion)
-	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
+	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxy_plugin_call_bridge)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
 	plugin.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
 	return 0
@@ -114,7 +115,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
-	// Best-effort: drop any in-flight device-code polls.
+	nousRefresher.Stop()
 	shutdownLoginPollers()
 }
 
@@ -188,6 +189,7 @@ func registerPayload() string {
       {"Name": "inference_base_url", "Type": "string", "Description": "OpenAI-compatible inference base URL (default https://inference-api.nousresearch.com/v1)"},
       {"Name": "client_id", "Type": "string", "Description": "OAuth client id (default hermes-cli)"},
       {"Name": "scope", "Type": "string", "Description": "OAuth scope (default inference:invoke)"},
+      {"Name": "model_aliases", "Type": "object", "Description": "Client-visible model alias to upstream model ID map"},
       {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default nous-portal-free)"}
     ]
   },

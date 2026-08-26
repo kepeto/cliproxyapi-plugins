@@ -1,5 +1,10 @@
 # Hermes Agent × Nous Portal Free Models — Reverse-Engineering Report
 
+> Historical snapshot from 2026-08-19. The repository implementation has since
+> moved to OAuth-authenticated Nous Free access, live catalog refresh, and
+> per-account catalog caching; do not use this report's implementation
+> recommendations as the current plugin contract.
+
 **Date:** 2026-08-19  
 **Analyst:** Automated reverse-engineering via local source inspection  
 **Hermes installation:** `/home/mipu/.hermes/hermes-agent/`  

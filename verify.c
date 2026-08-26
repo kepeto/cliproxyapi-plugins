@@ -1,14 +1,17 @@
-// Pure-C harness that dlopen()s the compiled plugin and drives the CLIProxyAPI
-// plugin protocol (cliproxy_plugin_init + cliproxyPluginCall). Validates the wire
-// contract without a second Go runtime in the process (which would crash).
+// Pure-C harness that loads one compiled plugin and drives the CLIProxyAPI
+// plugin protocol through the initialized plugin API. One process verifies one
+// shared object; the process exits without dlclose so an embedded Go runtime is
+// never unmapped while its goroutines are still alive.
 //
-// Build: gcc -o verify verify.c -ldl && ./verify
+// Build: gcc -O2 -o verify verify.c -ldl
+// Usage: ./verify [path/to/plugin.so]
+#include <dlfcn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <dlfcn.h>
 
+// This is the canonical plugin ABI used by the production plugins.
 typedef struct {
     void* ptr;
     size_t len;
@@ -17,8 +20,9 @@ typedef struct {
 typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
 typedef void (*cliproxy_host_free_fn)(void*, size_t);
 
-
 typedef struct {
+    uint32_t abi_version;
+    void* host_ctx;
     cliproxy_host_call_fn call;
     cliproxy_host_free_fn free_buffer;
 } cliproxy_host_api;
@@ -34,74 +38,13 @@ typedef struct {
     cliproxy_plugin_shutdown_fn shutdown;
 } cliproxy_plugin_api;
 
-typedef int (*cliproxy_plugin_init_fn)(const cliproxy_host_api*, cliproxy_plugin_api*);
-#ifndef SO
-#define SO "nous-portal.so"
-#endif
+typedef int (*cliproxy_plugin_init_fn)(cliproxy_host_api*, cliproxy_plugin_api*);
 
 static int failures = 0;
+static cliproxy_plugin_api* active_plugin;
 
-// Count occurrences of a substring (used to count model entries by "ID": keys).
-static int count_substr(const char* hay, const char* needle) {
-    int n = 0;
-    if (!hay || !needle) return 0;
-    size_t nl = strlen(needle);
-    const char* p = hay;
-    while ((p = strstr(p, needle)) != NULL) {
-        n++;
-        p += nl;
-    }
-    return n;
-}
-
-static int json_int(const char* json, const char* key, long* out) {
-    char pat[256];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char* p = strstr(json, pat);
-    if (!p) return 0;
-    p += strlen(pat);
-    while (*p && (*p == ' ' || *p == ':')) p++;
-    char* end;
-    long v = strtol(p, &end, 10);
-    if (end == p) return 0;
-    *out = v;
-    return 1;
-}
-
-// Check integer value of "key":<int>.
-static int json_int_eq(const char* json, const char* key, long want) {
-    long v = 0;
-    return json_int(json, key, &v) && v == want;
-}
-
-// Minimal JSON substring search: find "key":value (string) and compare.
-static int json_str_eq(const char* json, const char* key, const char* want) {
-    char pat[256];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char* p = strstr(json, pat);
-    if (!p) return 0;
-    p += strlen(pat);
-    while (*p && (*p == ' ' || *p == ':')) p++;
-    if (*p != '"') return 0;
-    p++;
-    return strncmp(p, want, strlen(want)) == 0 && p[strlen(want)] == '"';
-}
-
-static int json_bool(const char* json, const char* key) {
-    char pat[256];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char* p = strstr(json, pat);
-    if (!p) return -1;
-    p += strlen(pat);
-    while (*p && (*p == ' ' || *p == ':')) p++;
-    if (strncmp(p, "true", 4) == 0) return 1;
-    if (strncmp(p, "false", 5) == 0) return 0;
-    return -1;
-}
-
-
-static void check(int cond, const char* label) {
-    if (cond) {
+static void check(int condition, const char* label) {
+    if (condition) {
         printf("OK  %s\n", label);
     } else {
         printf("FAIL %s\n", label);
@@ -109,113 +52,171 @@ static void check(int cond, const char* label) {
     }
 }
 
-int main(void) {
-    void* h = dlopen(SO, RTLD_NOW | RTLD_LOCAL);
-    if (!h) {
-        fprintf(stderr, "dlopen %s failed: %s\n", SO, dlerror());
+static const char* json_key_value(const char* json, const char* key) {
+    char pattern[256];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char* p = strstr(json, pattern);
+    if (!p) return NULL;
+    p += strlen(pattern);
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ':') p++;
+    return p;
+}
+
+static int json_bool(const char* json, const char* key) {
+    const char* p = json_key_value(json, key);
+    if (!p) return -1;
+    if (strncmp(p, "true", 4) == 0) return 1;
+    if (strncmp(p, "false", 5) == 0) return 0;
+    return -1;
+}
+
+static int json_int_eq(const char* json, const char* key, long want) {
+    const char* p = json_key_value(json, key);
+    if (!p) return 0;
+    char* end = NULL;
+    long got = strtol(p, &end, 10);
+    return end != p && got == want;
+}
+
+static int json_str_eq(const char* json, const char* key, const char* want) {
+    const char* p = json_key_value(json, key);
+    if (!p || *p != '"') return 0;
+    p++;
+    size_t want_len = strlen(want);
+    return strncmp(p, want, want_len) == 0 && p[want_len] == '"';
+}
+
+static int json_nonempty_string(const char* json, const char* key) {
+    const char* p = json_key_value(json, key);
+    if (!p || *p != '"' || p[1] == '"') return 0;
+    return strchr(p + 1, '"') != NULL;
+}
+
+static char* invoke(const char* method, const char* request, size_t request_len, int* status_out) {
+    cliproxy_buffer response;
+    response.ptr = NULL;
+    response.len = 0;
+    int status = active_plugin->call(method, (const uint8_t*)request, request_len, &response);
+    if (status_out) *status_out = status;
+    if (!response.ptr) return NULL;
+
+    char* copy = malloc(response.len + 1);
+    if (!copy) {
+        active_plugin->free_buffer(response.ptr, response.len);
+        return NULL;
+    }
+    memcpy(copy, response.ptr, response.len);
+    copy[response.len] = '\0';
+    active_plugin->free_buffer(response.ptr, response.len);
+    return copy;
+}
+
+int main(int argc, char** argv) {
+    const char* so = argc > 1 ? argv[1] : "plugins/nous-portal/nous-portal.so";
+    printf("Verifying %s\n", so);
+
+    void* handle = dlopen(so, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        fprintf(stderr, "dlopen %s failed: %s\n", so, dlerror());
         return 2;
     }
 
-    cliproxy_plugin_init_fn init = (cliproxy_plugin_init_fn)dlsym(h, "cliproxy_plugin_init");
-    cliproxy_plugin_call_fn call = (cliproxy_plugin_call_fn)dlsym(h, "cliproxyPluginCall");
-    cliproxy_plugin_free_fn free_fn = (cliproxy_plugin_free_fn)dlsym(h, "cliproxyPluginFree");
-    cliproxy_plugin_shutdown_fn shutdown = (cliproxy_plugin_shutdown_fn)dlsym(h, "cliproxyPluginShutdown");
-    if (!init || !call || !free_fn || !shutdown) {
-        fprintf(stderr, "missing symbol\n");
+    cliproxy_plugin_init_fn init = (cliproxy_plugin_init_fn)dlsym(handle, "cliproxy_plugin_init");
+    void* direct_call = dlsym(handle, "cliproxyPluginCall");
+    void* direct_free = dlsym(handle, "cliproxyPluginFree");
+    void* direct_shutdown = dlsym(handle, "cliproxyPluginShutdown");
+    if (!init || !direct_call || !direct_free || !direct_shutdown) {
+        fprintf(stderr, "missing exported plugin symbol\n");
         return 2;
     }
 
-    cliproxy_host_api host_api;
-    memset(&host_api, 0, sizeof(host_api));
-    cliproxy_plugin_api plugin_api;
-    memset(&plugin_api, 0, sizeof(plugin_api));
-    if (init(&host_api, &plugin_api) != 0) {
-        fprintf(stderr, "init failed\n");
-        return 2;
-    }
-    if (plugin_api.abi_version != 1) {
-        fprintf(stderr, "abi_version=%u want 1\n", plugin_api.abi_version);
-        return 2;
-    }
+    cliproxy_host_api host;
+    memset(&host, 0, sizeof(host));
+    host.abi_version = 1;
 
-    char* invoke(const char* method, const char* req, size_t reqlen) {
-        cliproxy_buffer resp;
-        resp.ptr = NULL;
-        resp.len = 0;
-        call((char*)method, req ? (const uint8_t*)req : NULL, reqlen, &resp);
-        if (!resp.ptr) return NULL;
-        char* out = malloc(resp.len + 1);
-        memcpy(out, resp.ptr, resp.len);
-        out[resp.len] = 0;
-        free_fn(resp.ptr, resp.len);
-        return out;
+    cliproxy_plugin_api plugin;
+    memset(&plugin, 0, sizeof(plugin));
+    int init_status = init(&host, &plugin);
+    check(init_status == 0, "plugin init returns zero");
+    check(plugin.abi_version == 1, "plugin ABI version=1");
+    check(plugin.call != NULL, "plugin callback is populated");
+    check(plugin.free_buffer != NULL, "plugin free callback is populated");
+    check(plugin.shutdown != NULL, "plugin shutdown callback is populated");
+    if (init_status != 0 || !plugin.call || !plugin.free_buffer || !plugin.shutdown) {
+        return 1;
     }
+    active_plugin = &plugin;
 
-    // plugin.register
-    char* r = invoke("plugin.register", NULL, 0);
-    check(r != NULL, "plugin.register returns");
-    if (r) {
-        check(json_bool(r, "ok") == 1, "register ok=true");
-        check(json_int_eq(r, "schema_version", 2), "schema_version=2");
-        check(json_str_eq(r, "Name", "Nous Portal"), "metadata.Name=Nous Portal");
-        check(json_bool(r, "auth_provider") == 1, "capabilities.auth_provider");
-        check(json_bool(r, "model_provider") == 1, "capabilities.model_provider");
-        check(json_bool(r, "executor") == 1, "capabilities.executor");
-        check(json_str_eq(r, "executor_model_scope", "oauth"), "executor_model_scope=oauth");
-        free(r);
+    int status = 0;
+    char* registered = invoke("plugin.register", NULL, 0, &status);
+    check(status == 0, "plugin.register call returns zero");
+    check(registered != NULL, "plugin.register returns response");
+    if (registered) {
+        check(json_bool(registered, "ok") == 1, "plugin.register ok=true");
+        check(json_int_eq(registered, "schema_version", 2), "schema_version=2");
+        check(json_nonempty_string(registered, "Name"), "metadata.Name nonempty");
+        check(json_nonempty_string(registered, "Version"), "metadata.Version nonempty");
+        check(json_nonempty_string(registered, "Prefix"), "metadata.Prefix nonempty");
+        free(registered);
     }
 
-    // identifiers
-    const char* ids[] = {"auth.identifier", "executor.identifier"};
-    for (int i = 0; i < 2; i++) {
-        char* ri = invoke(ids[i], NULL, 0);
-        check(ri && json_str_eq(ri, "Identifier", "nous-portal"), ids[i]);
-        free(ri);
+    char* reconfigured = invoke("plugin.reconfigure", NULL, 0, &status);
+    check(reconfigured != NULL, "plugin.reconfigure returns response");
+    if (reconfigured) {
+        check(json_bool(reconfigured, "ok") == 1, "plugin.reconfigure ok=true");
+        free(reconfigured);
     }
 
-    // model.static
-    char* ms = invoke("model.static", NULL, 0);
-    check(ms && json_str_eq(ms, "Provider", "nous-portal"), "model.static Provider=nous-portal");
-    int mcount = ms ? count_substr(ms, "\"ID\":") : 0;
-    check(mcount > 0, "model.static has models");
-    free(ms);
-
-    // auth.parse foreign -> Handled=false
-    const char* foreign = "{\"type\":\"openai\",\"api_key\":\"x\"}";
-    char* apf = invoke("auth.parse", foreign, strlen(foreign));
-    check(apf && json_bool(apf, "Handled") == 0, "auth.parse foreign Handled=false");
-    free(apf);
-
-    // auth.parse nous-portal -> Handled=true, Provider=nous-portal
-    const char* nous = "{\"type\":\"nous-portal\",\"access_token\":\"at\",\"refresh_token\":\"rt\",\"expires_at\":\"2030-01-01T00:00:00Z\",\"portal_base_url\":\"https://portal.nousresearch.com\",\"inference_base_url\":\"https://inference-api.nousresearch.com/v1\",\"client_id\":\"hermes-cli\",\"scope\":\"inference:invoke\"}";
-    char* apn = invoke("auth.parse", nous, strlen(nous));
-    check(apn && json_bool(apn, "Handled") == 1, "auth.parse nous Handled=true");
-    // Provider appears inside result.Auth.Provider
-    if (apn) {
-        char* auth = strstr(apn, "\"Auth\"");
-        check(auth && json_str_eq(auth, "Provider", "nous-portal"), "auth.parse Auth.Provider=nous-portal");
-    }
-    free(apn);
-
-    // executor.execute missing auth -> error code auth_required
-    const char* execreq = "{\"Model\":\"openai/gpt-5.5\",\"Stream\":false,\"Payload\":\"eyJtb2RlbCI6Im9wZW5haS9ncHQtNS41IiwibWVzc2FnZXMiOltdfQ==\",\"StorageJSON\":\"e30=\"}";
-    char* ex = invoke("executor.execute", execreq, strlen(execreq));
-    check(ex != NULL, "executor.execute returns");
-    if (ex) {
-        // error envelope: ok=false, error.code=auth_required
-        int ok = json_bool(ex, "ok");
-        char* err = strstr(ex, "\"error\"");
-        check(ok == 0, "executor.execute ok=false (missing auth)");
-        check(err && json_str_eq(err, "code", "auth_required"), "executor.execute error.code=auth_required");
-        free(ex);
+    char* auth_identifier = invoke("auth.identifier", NULL, 0, &status);
+    check(auth_identifier != NULL, "auth.identifier returns response");
+    if (auth_identifier) {
+        check(json_bool(auth_identifier, "ok") == 1, "auth.identifier ok=true");
+        check(json_nonempty_string(auth_identifier, "Identifier"), "auth.identifier nonempty");
+        free(auth_identifier);
     }
 
-    shutdown();
+    char* executor_identifier = invoke("executor.identifier", NULL, 0, &status);
+    check(executor_identifier != NULL, "executor.identifier returns response");
+    if (executor_identifier) {
+        check(json_bool(executor_identifier, "ok") == 1, "executor.identifier ok=true");
+        check(json_nonempty_string(executor_identifier, "Identifier"), "executor.identifier nonempty");
+        free(executor_identifier);
+    }
 
+    const char* foreign_auth = "{\"type\":\"openai\",\"api_key\":\"x\"}";
+    char* parsed = invoke("auth.parse", foreign_auth, strlen(foreign_auth), &status);
+    check(parsed != NULL, "auth.parse foreign returns response");
+    if (parsed) {
+        check(json_bool(parsed, "Handled") == 0, "auth.parse foreign Handled=false");
+        free(parsed);
+    }
+
+    const char* empty_request = "{}";
+    char* execute = invoke("executor.execute", empty_request, strlen(empty_request), &status);
+    check(execute != NULL, "executor.execute invalid request returns response");
+    if (execute) {
+        check(json_bool(execute, "ok") == 0, "executor.execute invalid request ok=false");
+        free(execute);
+    }
+
+    char* unknown = invoke("unknown.method", NULL, 0, &status);
+    check(unknown != NULL, "unknown method returns response");
+    if (unknown) {
+        check(json_bool(unknown, "ok") == 0, "unknown method ok=false");
+        check(json_str_eq(unknown, "code", "unknown_method"), "unknown method code");
+        free(unknown);
+    }
+
+    active_plugin->shutdown();
+
+    // Deliberately do not call dlclose(handle): a Go c-shared runtime may still
+    // own goroutines at shutdown, and unmapping it here recreates the hotswap
+    // SIGSEGV documented by this repository.
+    (void)handle;
     if (failures == 0) {
-        printf("\nALL CHECKS PASSED\n");
+        printf("ALL CHECKS PASSED\n");
         return 0;
     }
-    printf("\n%d CHECK(S) FAILED\n", failures);
+    printf("%d CHECK(S) FAILED\n", failures);
     return 1;
 }

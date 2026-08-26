@@ -5,67 +5,103 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
-// loginCount tracks OAuth logins within this plugin instance for multi-account
-// filename generation. Resets on plugin reload; the user can manually rename
-// files if a stable primary filename is required.
-var loginCount int
+var (
+	loginCount int
+	loginMu    sync.Mutex
+)
 
-// nextAccountFileName returns the next available auth filename for a new
-// nous-portal-free account. The first login in a session writes nous-portal-free.json;
-// subsequent logins write nous-portal-free-2.json, nous-portal-free-3.json, etc.
-// Each file becomes an independent client in CPA with its own OAuth tokens.
-func nextAccountFileName() string {
-	loginCount++
-	if loginCount == 1 {
-		return "nous-portal-free.json"
+// nextAccountFileName returns the first unused account filename. The auth
+// directory scan prevents a plugin reload from overwriting an existing file;
+// the mutex prevents concurrent login.start calls from selecting the same name.
+func nextAccountFileName(raw []byte) string {
+	var req struct {
+		Host struct {
+			AuthDir string
+		}
 	}
-	return fmt.Sprintf("nous-portal-free-%d.json", loginCount)
+	_ = json.Unmarshal(raw, &req)
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	for {
+		loginCount++
+		name := ProviderID + ".json"
+		if loginCount > 1 {
+			name = fmt.Sprintf("%s-%d.json", ProviderID, loginCount)
+		}
+		if req.Host.AuthDir == "" {
+			return name
+		}
+		if _, err := os.Stat(filepath.Join(req.Host.AuthDir, name)); os.IsNotExist(err) {
+			return name
+		} else if err != nil {
+			return name
+		}
+	}
+}
+
+func generateAccountID() string {
+	return ProviderID + "-" + randomState()
 }
 
 // handleAuthParse recognizes nous-portal-free credential JSON files and returns the auth record.
 // It only accepts standard storageJSON with "type": "nous-portal-free".
 // Auth files from nous-portal are NOT shared; each plugin maintains separate credentials.
 func handleAuthParse(raw []byte) ([]byte, error) {
+	storage := raw
+	fileName := ""
+	var envelope struct {
+		FileName string `json:"FileName"`
+		RawJSON  []byte `json:"RawJSON"`
+	}
+	if json.Unmarshal(raw, &envelope) == nil && len(envelope.RawJSON) > 0 {
+		storage = envelope.RawJSON
+		fileName = strings.TrimSpace(envelope.FileName)
+	}
 	var probe map[string]any
-	if err := json.Unmarshal(raw, &probe); err != nil {
+	if err := json.Unmarshal(storage, &probe); err != nil {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
 	typ, _ := probe["type"].(string)
 	if strings.ToLower(strings.TrimSpace(typ)) != ProviderID {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
-	store := decodeStorage(raw)
-	if !store.valid() {
+	store := decodeStorage(storage)
+	if !store.structuralValid() {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
-	fileName := "nous-portal-free.json"
+	if fileName == "" {
+		fileName = strings.TrimSpace(store.FileName)
+	}
+	if fileName == "" {
+		fileName = "nous-portal-free.json"
+	}
+	store.FileName = fileName
 	label := "Nous Portal Free"
-	id := ProviderID
-
-	// Prefer explicit AccountID so each credential has a stable unique identity.
-	if store.AccountID != "" {
-		id = store.AccountID
-	} else if fname, ok := probe["FileName"].(string); ok && strings.TrimSpace(fname) != "" {
-		fileName = strings.TrimSpace(fname)
-		stem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-		if stem != "" && strings.ToLower(stem) != ProviderID {
-			label = label + " (" + stem + ")"
-			id = stem
-		}
-	} else if store.RefreshToken != "" {
-		// Legacy files without AccountID/FileName: derive a deterministic ID
-		// from the refresh token so multiple files don't collapse to one ID.
+	id := store.AccountID
+	stem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+	if id == "" && stem != "" && strings.ToLower(stem) != ProviderID {
+		label += " (" + stem + ")"
+		id = stem
+	}
+	if id == "" && store.RefreshToken != "" {
 		h := sha256.Sum256([]byte(store.RefreshToken))
-		id = ProviderID + "-" + hex.EncodeToString(h[:4])
+		id = ProviderID + "-" + hex.EncodeToString(h[:8])
+	}
+	if id == "" {
+		id = ProviderID
 	}
 
-	auth := buildAuthDataWithID(store, "nous-portal-free", fileName, label, id, nil)
+	auth := buildAuthDataWithID(store, ProviderID, fileName, label, id, nil)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Handled": true,
 		"Auth":    auth,
@@ -97,19 +133,20 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 	}
 
 	state := randomState()
-	accountFileName := nextAccountFileName()
+	accountFileName := nextAccountFileName(raw)
 	loginStates.put(state, &loginState{
-		deviceCode:       dc.DeviceCode,
-		verificationURI:  dc.VerificationURIComplete,
-		userCode:         dc.UserCode,
-		expiresAt:        time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second),
-		interval:         dc.Interval,
-		portalBaseURL:    portal,
-		inferenceBaseURL: cfg.inferenceBaseURL(),
-		clientID:         cfg.clientID(),
-		scope:            cfg.scope(),
-		createdAt:        time.Now(),
-		accountFileName:  accountFileName,
+		deviceCode:               dc.DeviceCode,
+		verificationURI:          dc.VerificationURIComplete,
+		userCode:                 dc.UserCode,
+		expiresAt:                time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second),
+		interval:                 dc.Interval,
+		portalBaseURL:            portal,
+		inferenceBaseURL:         cfg.inferenceBaseURL(),
+		inferenceBaseURLExplicit: strings.TrimSpace(cfg.InferenceBaseURL) != "",
+		clientID:                 cfg.clientID(),
+		scope:                    cfg.scope(),
+		createdAt:                time.Now(),
+		accountFileName:          accountFileName,
 	})
 
 	return okEnvelopeJSON(mustJSON(map[string]any{
@@ -171,26 +208,33 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 		if tok.AccessToken == "" || tok.RefreshToken == "" {
 			return errorEnvelope("login_poll_failed", "token response missing access/refresh token"), nil
 		}
-		inferenceURL := trimHTTP(tok.InferenceBaseURL)
+		inferenceURL := ""
+		if ls.inferenceBaseURLExplicit {
+			inferenceURL = trimHTTP(ls.inferenceBaseURL)
+		}
+		if inferenceURL == "" {
+			inferenceURL = trimHTTP(tok.InferenceBaseURL)
+		}
 		if inferenceURL == "" {
 			inferenceURL = ls.inferenceBaseURL
+		}
+		fileName := ls.accountFileName
+		if fileName == "" {
+			fileName = "nous-portal-free.json"
 		}
 		store := storageJSON{
 			AccessToken:      tok.AccessToken,
 			RefreshToken:     tok.RefreshToken,
-			ExpiresAt:        expiryFromNow(tok.ExpiresIn),
+			ExpiresAt:        expiryFromToken(tok.AccessToken, tok.ExpiresIn),
 			PortalBaseURL:    ls.portalBaseURL,
 			InferenceBaseURL: inferenceURL,
 			ClientID:         ls.clientID,
 			Scope:            ls.scope,
 			AccountID:        generateAccountID(),
+			FileName:         fileName,
 		}
 		loginStates.delete(req.State)
-		fileName := ls.accountFileName
-		if fileName == "" {
-			fileName = "nous-portal-free.json"
-		}
-		auth := buildAuthData(store, "nous-portal-free", fileName, "Nous Portal Free", nil)
+		auth := buildAuthDataWithID(store, ProviderID, fileName, "Nous Portal Free", store.AccountID, nil)
 		return okEnvelopeJSON(mustJSON(map[string]any{
 			"Status":  "success",
 			"Message": "Nous Portal login complete",
@@ -248,7 +292,7 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		return errorEnvelope("refresh_failed", "invalid refresh request: "+err.Error()), nil
 	}
 	store := decodeStorage(req.StorageJSON)
-	if !store.valid() || store.RefreshToken == "" {
+	if store.RefreshToken == "" {
 		return errorEnvelope("refresh_failed", "no usable refresh token"), nil
 	}
 
@@ -280,34 +324,30 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 	if tok.AccessToken == "" {
 		return errorEnvelope("refresh_failed", "refresh response missing access_token"), nil
 	}
-	inferenceURL := trimHTTP(tok.InferenceBaseURL)
+	inferenceURL := trimHTTP(store.InferenceBaseURL)
 	if inferenceURL == "" {
-		inferenceURL = store.InferenceBaseURL
+		inferenceURL = trimHTTP(tok.InferenceBaseURL)
+	}
+	if inferenceURL == "" {
+		return errorEnvelope("refresh_failed", "refresh response missing inference_base_url"), nil
 	}
 	next := storageJSON{
 		AccessToken:      tok.AccessToken,
 		RefreshToken:     firstNonEmpty(tok.RefreshToken, store.RefreshToken),
-		ExpiresAt:        expiryFromNow(tok.ExpiresIn),
+		ExpiresAt:        expiryFromToken(tok.AccessToken, tok.ExpiresIn),
 		PortalBaseURL:    portal,
 		InferenceBaseURL: inferenceURL,
 		ClientID:         clientID,
 		Scope:            firstNonEmpty(tok.Scope, store.Scope),
 		AccountID:        store.AccountID,
+		FileName:         store.FileName,
+		ModelCatalog:     store.ModelCatalog,
 	}
-	id := req.AuthID
-	if id == "" {
-		id = "nous-portal-free"
-		if store.AccountID != "" {
-			id = store.AccountID
-		} else if store.RefreshToken != "" {
-			h := sha256.Sum256([]byte(store.RefreshToken))
-			id = "nous-portal-free-" + hex.EncodeToString(h[:4])
-		}
-	}
-	auth := buildAuthDataWithID(next, "nous-portal-free", "nous-portal-free.json", "Nous Portal Free", id, nil)
+	storageJSON, _ := json.Marshal(next)
+	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Auth":             auth,
-		"NextRefreshAfter": next.ExpiresAt.Add(-5 * time.Minute).Format(time.RFC3339),
+		"NextRefreshAfter": nextRefreshAfter(next.ExpiresAt),
 	}))
 }
 
@@ -322,12 +362,31 @@ func decodeStorage(raw []byte) storageJSON {
 	return s
 }
 
+const refreshSkew = 5 * time.Minute
+
 func expiryFromNow(expiresIn int) time.Time {
 	if expiresIn <= 0 {
-		expiresIn = 3600
+		return time.Time{}
 	}
-	// 5-minute skew so refresh happens before expiry.
-	return time.Now().Add(time.Duration(expiresIn)*time.Second - 5*time.Minute)
+	return time.Now().Add(time.Duration(expiresIn) * time.Second)
+}
+
+func expiryFromToken(token string, expiresIn int) time.Time {
+	if expiry, ok := shared.JWTExpiry(token); ok {
+		return expiry
+	}
+	return expiryFromNow(expiresIn)
+}
+
+func nextRefreshAfter(expiresAt time.Time) string {
+	if expiresAt.IsZero() {
+		return ""
+	}
+	at := expiresAt.Add(-refreshSkew)
+	if at.Before(time.Now()) {
+		at = time.Now()
+	}
+	return at.Format(time.RFC3339)
 }
 
 func buildAuthData(store storageJSON, provider, fileName, label string, extraMeta map[string]any) map[string]any {
@@ -393,14 +452,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// generateAccountID creates a short random identifier for a newly authenticated
-// account. Used to keep multiple nous-portal-free credentials distinct in CPA.
-func generateAccountID() string {
-	var buf [4]byte
-	for i := range buf {
-		buf[i] = byte('a' + (time.Now().UnixNano() >> (i * 8) & 0xF))
-	}
-	return ProviderID + "-" + string(buf[:])
 }
