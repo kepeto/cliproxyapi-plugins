@@ -86,6 +86,7 @@ func handleAuthParse(raw []byte) ([]byte, error) {
 		fileName = "nous-portal-free.json"
 	}
 	store.FileName = fileName
+	rememberNousProbeStore(store)
 	label := "Nous Portal Free"
 	id := store.AccountID
 	stem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
@@ -233,6 +234,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			AccountID:        generateAccountID(),
 			FileName:         fileName,
 		}
+		rememberNousProbeStore(store)
 		loginStates.delete(req.State)
 		auth := buildAuthDataWithID(store, ProviderID, fileName, "Nous Portal Free", store.AccountID, nil)
 		return okEnvelopeJSON(mustJSON(map[string]any{
@@ -343,6 +345,7 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		FileName:         store.FileName,
 		ModelCatalog:     store.ModelCatalog,
 	}
+	rememberNousProbeStore(next)
 	storageJSON, _ := json.Marshal(next)
 	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
 	return okEnvelopeJSON(mustJSON(map[string]any{

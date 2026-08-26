@@ -258,3 +258,86 @@ func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
 	}
 	t.Fatal("model_aliases ConfigField missing")
 }
+
+func TestModelStaticHidesAndRestoresProbeFailure(t *testing.T) {
+	originalRefresher := kiloRefresher
+	defer func() { kiloRefresher = originalRefresher }()
+	model := "probe-failure-free"
+	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{model}, nil
+	}, nil)
+	scope := kiloHealthScope()
+	modelHealth.RecordProbeFailure(scope, model)
+	defer modelHealth.RecordProbeSuccess(scope, model)
+
+	response, _ := handleModelStatic(nil)
+	var hidden struct {
+		Result struct {
+			Models []map[string]any `json:"Models"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &hidden); err != nil {
+		t.Fatal(err)
+	}
+	if len(hidden.Result.Models) != 0 {
+		t.Fatalf("quarantined model remained visible: %s", response)
+	}
+
+	modelHealth.RecordProbeSuccess(scope, model)
+	response, _ = handleModelStatic(nil)
+	if err := json.Unmarshal(response, &hidden); err != nil {
+		t.Fatal(err)
+	}
+	if len(hidden.Result.Models) != 1 {
+		t.Fatalf("recovered model was not visible: %s", response)
+	}
+}
+
+func TestSmokeFailureHidesAndProbeRestoresModel(t *testing.T) {
+	originalRefresher := kiloRefresher
+	originalChatURL := currentKiloChatURL()
+	defer func() {
+		kiloRefresher = originalRefresher
+		endpointMu.Lock()
+		kiloChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+	model := "probe-health-free"
+	status := http.StatusTooManyRequests
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{model}, nil
+	}, nil)
+	endpointMu.Lock()
+	kiloChatURL = server.URL
+	endpointMu.Unlock()
+
+	response, _ := handleExecutorExecute([]byte(`{"Model":"probe-health-free","Messages":[{"role":"user","content":"hi"}]}`))
+	if !strings.Contains(string(response), `"upstream_error"`) {
+		t.Fatalf("smoke failure response = %s", response)
+	}
+	scope := kiloHealthScope()
+	if !modelHealth.Hidden(scope, model) {
+		t.Fatal("rate-limited model remained visible")
+	}
+
+	status = http.StatusOK
+	target := shared.ModelProbeTarget{Scope: scope, Model: model}
+	if !modelHealth.BeginProbe(scope, model) || probeKiloModel(target) != shared.ProbeSucceeded {
+		t.Fatal("successful recovery probe did not complete")
+	}
+	modelHealth.RecordProbeSuccess(scope, model)
+	response, _ = handleModelStatic(nil)
+	if strings.Contains(string(response), `"Models":[]`) {
+		t.Fatalf("recovered model remained hidden: %s", response)
+	}
+	modelHealth.RecordProbeSuccess(scope, model)
+}

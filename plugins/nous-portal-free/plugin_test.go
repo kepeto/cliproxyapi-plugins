@@ -364,3 +364,51 @@ func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
 	}
 	t.Fatal("model_aliases ConfigField missing")
 }
+
+func TestNousProbeHidesAndRestoresModel(t *testing.T) {
+	status := http.StatusTooManyRequests
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	cache, err := json.Marshal([]rawCatalogModel{{ID: "cached/model:free"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storageJSON{
+		AccessToken:      "token",
+		InferenceBaseURL: server.URL,
+		AccountID:        "account-probe",
+		ModelCatalog:     cache,
+	}
+	scope := nousHealthScope(store)
+	rememberNousProbeStore(store)
+	defer func() {
+		nousProbeStores.Lock()
+		delete(nousProbeStores.byScope, scope)
+		nousProbeStores.Unlock()
+		modelHealth.RecordProbeSuccess(scope, "cached/model:free")
+	}()
+	target := shared.ModelProbeTarget{Scope: scope, Model: "cached/model:free"}
+	if !modelHealth.BeginProbe(scope, target.Model) || probeNousModel(target) != shared.ProbeFailed {
+		t.Fatal("failed Nous probe did not complete")
+	}
+	modelHealth.RecordProbeFailure(scope, target.Model)
+	if !modelHealth.Hidden(scope, target.Model) {
+		t.Fatal("failed Nous probe did not hide model")
+	}
+
+	status = http.StatusOK
+	if !modelHealth.BeginProbe(scope, target.Model) || probeNousModel(target) != shared.ProbeSucceeded {
+		t.Fatal("successful Nous recovery probe did not complete")
+	}
+	modelHealth.RecordProbeSuccess(scope, target.Model)
+	if modelHealth.Hidden(scope, target.Model) {
+		t.Fatal("successful Nous probe did not restore model")
+	}
+}

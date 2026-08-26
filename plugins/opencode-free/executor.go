@@ -14,6 +14,19 @@ import (
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
+func recordInferenceFailure(scope, model string, status int, body []byte, err error) {
+	if status == 401 || status == 403 {
+		return
+	}
+	if err != nil || status == 408 || status == 429 || status >= 500 {
+		modelHealth.RecordProbeFailure(scope, model)
+		return
+	}
+	if shared.IsModelSpecificFailure(status, body, nil) {
+		modelHealth.RecordFailure(scope, model)
+	}
+}
+
 var streamTransport = &http.Transport{
 	ResponseHeaderTimeout: 30 * time.Second,
 }
@@ -52,20 +65,16 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 
 	status, body, err := executeOpenCodeChatWithRetry(payload, false)
 	if err != nil {
-		if shared.IsModelSpecificFailure(status, body, err) {
-			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
-		}
+		recordInferenceFailure(openCodeHealthScope(), baseModelID, status, body, err)
 		return errorEnvelope("upstream_error", err.Error()), nil
 	}
 
 	if status < 200 || status >= 300 {
-		if shared.IsModelSpecificFailure(status, body, nil) {
-			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
-		}
+		recordInferenceFailure(openCodeHealthScope(), baseModelID, status, body, nil)
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
 	if !shared.ValidChatResponse(body) {
-		modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
+		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("upstream_error", "invalid or empty chat response"), nil
 	}
 	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
@@ -108,9 +117,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 
 	reader, status, err := executeOpenCodeChatStreamWithRetry(payload)
 	if err != nil {
-		if shared.IsModelSpecificFailure(status, nil, err) {
-			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
-		}
+		recordInferenceFailure(openCodeHealthScope(), baseModelID, status, nil, err)
 		return errorEnvelope("upstream_error", err.Error()), nil
 	}
 	if status != 200 {
@@ -118,9 +125,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()
 		body := buf.Bytes()
-		if shared.IsModelSpecificFailure(status, body, nil) {
-			modelHealth.RecordFailure(openCodeHealthScope(), baseModelID)
-		}
+		recordInferenceFailure(openCodeHealthScope(), baseModelID, status, body, nil)
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+buf.String(), status), nil
 	}
 
@@ -136,6 +141,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
+			modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -146,16 +152,19 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
+			modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		chunks = append(chunks, map[string]any{"Payload": base64encode([]byte(line + "\n"))})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
+		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
+		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
 	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)

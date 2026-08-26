@@ -116,6 +116,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	if !store.valid() {
 		return shared.OKEnvelope(modelStaticPayload())
 	}
+	rememberNousProbeStore(store)
 
 	scope := nousHealthScope(store)
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
@@ -153,6 +154,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	updated := store
 	updated.ModelCatalog, _ = json.Marshal(freeModels)
 	storageJSON, _ := json.Marshal(updated)
+	rememberNousProbeStore(updated)
 	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
 
 	return shared.OKEnvelope(shared.MustJSON(map[string]any{

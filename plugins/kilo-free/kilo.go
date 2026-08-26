@@ -40,9 +40,11 @@ var (
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
 var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
+var kiloProber = shared.NewModelProbeScheduler(15*time.Minute, modelHealth, kiloProbeTargets, probeKiloModel)
 
 func init() {
 	kiloRefresher.Start()
+	kiloProber.Start()
 }
 
 func kiloHeaders() map[string]string {
@@ -132,7 +134,7 @@ func currentKiloModelsURL() string {
 }
 
 func kiloHealthScope() string {
-	return PROVIDER_ID + "|" + currentKiloChatURL()
+	return PROVIDER_ID + "|" + currentKiloChatURL() + "|" + currentKiloModelsURL()
 }
 
 func httpDo(req *http.Request) (int, []byte, error) {
@@ -212,4 +214,42 @@ func healthCheckKilo() bool {
 		return false
 	}
 	return statusCode == 200
+}
+
+func kiloProbeTargets() []shared.ModelProbeTarget {
+	scope := kiloHealthScope()
+	ids := kiloRefresher.Models()
+	targets := make([]shared.ModelProbeTarget, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		targets = append(targets, shared.ModelProbeTarget{Scope: scope, Model: id})
+	}
+	return targets
+}
+
+func probeKiloModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome {
+	if target.Scope != kiloHealthScope() {
+		return shared.ProbeIgnored
+	}
+	payload, err := json.Marshal(map[string]any{
+		"model":      target.Model,
+		"messages":   []map[string]string{{"role": "user", "content": "Reply with OK."}},
+		"max_tokens": 16,
+		"stream":     false,
+	})
+	if err != nil {
+		return shared.ProbeFailed
+	}
+	status, body, err := executeKiloChat(payload, false)
+	if status == 401 || status == 403 {
+		return shared.ProbeIgnored
+	}
+	if err != nil || status != 200 || !shared.ValidChatResponse(body) {
+		return shared.ProbeFailed
+	}
+	return shared.ProbeSucceeded
 }

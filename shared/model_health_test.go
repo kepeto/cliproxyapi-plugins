@@ -72,3 +72,46 @@ func TestValidChatResponse(t *testing.T) {
 		t.Fatal("error response accepted")
 	}
 }
+
+func TestModelHealthProbeHidesUntilSuccess(t *testing.T) {
+	health := NewModelHealth(3, time.Hour)
+	if !health.BeginProbe("provider", "model") {
+		t.Fatal("first probe lease rejected")
+	}
+	if health.Hidden("provider", "model") {
+		t.Fatal("healthy model hidden while probe is running")
+	}
+	health.RecordProbeFailure("provider", "model")
+	if !health.Hidden("provider", "model") || health.Allow("provider", "model") {
+		t.Fatal("probe failure did not hide model")
+	}
+	if !health.BeginProbe("provider", "model") {
+		t.Fatal("recovery probe lease rejected")
+	}
+	health.RecordProbeSuccess("provider", "model")
+	if health.Hidden("provider", "model") || !health.Allow("provider", "model") {
+		t.Fatal("probe success did not restore model")
+	}
+}
+
+func TestShouldQuarantineModel(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		err    error
+		want   bool
+	}{
+		{name: "rate limit", status: 429, want: true},
+		{name: "server", status: 503, want: true},
+		{name: "transport", err: errors.New("timeout"), want: true},
+		{name: "auth", status: 401, want: false},
+		{name: "caller", status: 400, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ShouldQuarantineModel(tc.status, nil, tc.err); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

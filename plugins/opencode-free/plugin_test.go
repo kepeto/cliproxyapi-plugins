@@ -255,3 +255,86 @@ func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
 	}
 	t.Fatal("model_aliases ConfigField missing")
 }
+
+func TestModelStaticHidesAndRestoresProbeFailure(t *testing.T) {
+	originalRefresher := opencodeRefresher
+	defer func() { opencodeRefresher = originalRefresher }()
+	model := "probe-failure-free"
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{model}, nil
+	}, nil)
+	scope := openCodeHealthScope()
+	modelHealth.RecordProbeFailure(scope, model)
+	defer modelHealth.RecordProbeSuccess(scope, model)
+
+	response, _ := handleModelStatic(nil)
+	var hidden struct {
+		Result struct {
+			Models []map[string]any `json:"Models"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &hidden); err != nil {
+		t.Fatal(err)
+	}
+	if len(hidden.Result.Models) != 0 {
+		t.Fatalf("quarantined model remained visible: %s", response)
+	}
+
+	modelHealth.RecordProbeSuccess(scope, model)
+	response, _ = handleModelStatic(nil)
+	if err := json.Unmarshal(response, &hidden); err != nil {
+		t.Fatal(err)
+	}
+	if len(hidden.Result.Models) != 1 {
+		t.Fatalf("recovered model was not visible: %s", response)
+	}
+}
+
+func TestSmokeFailureHidesAndProbeRestoresModel(t *testing.T) {
+	originalRefresher := opencodeRefresher
+	originalChatURL := currentOpenCodeChatURL()
+	defer func() {
+		opencodeRefresher = originalRefresher
+		endpointMu.Lock()
+		opencodeChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+	model := "probe-health-free"
+	status := http.StatusServiceUnavailable
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{model}, nil
+	}, nil)
+	endpointMu.Lock()
+	opencodeChatURL = server.URL
+	endpointMu.Unlock()
+
+	response, _ := handleExecutorExecute([]byte(`{"Model":"probe-health-free","Messages":[{"role":"user","content":"hi"}]}`))
+	if !strings.Contains(string(response), `"upstream_error"`) {
+		t.Fatalf("smoke failure response = %s", response)
+	}
+	scope := openCodeHealthScope()
+	if !modelHealth.Hidden(scope, model) {
+		t.Fatal("unavailable model remained visible")
+	}
+
+	status = http.StatusOK
+	target := shared.ModelProbeTarget{Scope: scope, Model: model}
+	if !modelHealth.BeginProbe(scope, model) || probeOpenCodeModel(target) != shared.ProbeSucceeded {
+		t.Fatal("successful recovery probe did not complete")
+	}
+	modelHealth.RecordProbeSuccess(scope, model)
+	response, _ = handleModelStatic(nil)
+	if strings.Contains(string(response), `"Models":[]`) {
+		t.Fatalf("recovered model remained hidden: %s", response)
+	}
+	modelHealth.RecordProbeSuccess(scope, model)
+}

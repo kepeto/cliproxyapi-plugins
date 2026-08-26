@@ -148,9 +148,14 @@ curl -s -X POST http://localhost:8317/v1/chat/completions \
   override host aliases. OpenCode/Kilo require a live-catalog target, Nous full
   forwards the configured upstream ID, and Nous Free requires a cached,
   allowlisted, or `:free` target.
-- Repeated model-specific failures quarantine a model after three failures for
-  15 minutes. Authentication, rate-limit, transport/provider-wide, and caller
-  errors do not quarantine individual models.
+- Free plugins run model-specific background probes every 15 minutes. A failed
+  probe or limit/server/timeout/invalid response hides that model immediately;
+  a successful later probe clears the state and makes it visible again.
+- Normal model-specific 4xx failures use the three-failure quarantine threshold.
+  Authentication and caller-validation errors do not change model health.
+- `python3 scripts/check_free_models.py --watch --interval 900` shows visible
+  catalog snapshots and observed hidden/reappeared models; it is diagnostic and
+  does not directly mutate CPA's registry.
 - SSE responses are buffered; each stream accepts at most 100,000 chunks, 100 MiB
   of payload, and 1 MiB per scanner line. `data: ` is stripped and blank/comment
   lines are skipped; empty, oversized, or read-failed streams return errors.

@@ -70,10 +70,11 @@ Alias changes apply after `plugin.reconfigure` without restart.
 
 ## Runtime Guarantees
 
-Model-specific failures quarantine after 3 failures for 15 minutes, with
-exponential backoff up to 1 hour; auth, rate-limit, provider-wide, 5xx, and
-caller errors do not quarantine models. SSE is buffered with 100,000-chunk,
-100 MiB total, and 1 MiB line limits; empty/read/limit failures are errors.
+Health probes run every 15 minutes for models in the live catalog. A failed
+probe or limit/server/timeout/invalid response hides that model immediately; a
+successful later probe restores it. Normal model-specific 4xx failures use the
+three-failure threshold. SSE is buffered with 100,000-chunk, 100 MiB total, and
+1 MiB line limits.
 
 ## Files
 

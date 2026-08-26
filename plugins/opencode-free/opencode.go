@@ -63,9 +63,11 @@ var (
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
 var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
+var opencodeProber = shared.NewModelProbeScheduler(15*time.Minute, modelHealth, opencodeProbeTargets, probeOpenCodeModel)
 
 func init() {
 	opencodeRefresher.Start()
+	opencodeProber.Start()
 }
 
 // fetchOpenCodeModels retrieves the current free model list from OpenCode.
@@ -124,6 +126,44 @@ func healthCheckOpenCode() bool {
 		return false
 	}
 	return statusCode == 200
+}
+
+func opencodeProbeTargets() []shared.ModelProbeTarget {
+	scope := openCodeHealthScope()
+	ids := opencodeRefresher.Models()
+	targets := make([]shared.ModelProbeTarget, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		targets = append(targets, shared.ModelProbeTarget{Scope: scope, Model: id})
+	}
+	return targets
+}
+
+func probeOpenCodeModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome {
+	if target.Scope != openCodeHealthScope() {
+		return shared.ProbeIgnored
+	}
+	payload, err := json.Marshal(map[string]any{
+		"model":      target.Model,
+		"messages":   []map[string]string{{"role": "user", "content": "Reply with OK."}},
+		"max_tokens": 16,
+		"stream":     false,
+	})
+	if err != nil {
+		return shared.ProbeFailed
+	}
+	status, body, err := executeOpenCodeChat(payload, false)
+	if status == 401 || status == 403 {
+		return shared.ProbeIgnored
+	}
+	if err != nil || status != 200 || !shared.ValidChatResponse(body) {
+		return shared.ProbeFailed
+	}
+	return shared.ProbeSucceeded
 }
 
 // config holds plugin-level overrides resolved from plugins.configs.opencode-free.
@@ -204,7 +244,7 @@ func currentOpenCodeModelsURL() string {
 }
 
 func openCodeHealthScope() string {
-	return PROVIDER_ID + "|" + currentOpenCodeChatURL()
+	return PROVIDER_ID + "|" + currentOpenCodeChatURL() + "|" + currentOpenCodeModelsURL()
 }
 
 func httpDo(req *http.Request) (int, []byte, error) {

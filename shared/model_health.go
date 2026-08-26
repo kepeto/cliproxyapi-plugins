@@ -76,17 +76,13 @@ func (h *ModelHealth) Allow(scope, model string) bool {
 // Hidden reports whether model should be omitted from a catalog projection.
 func (h *ModelHealth) Hidden(scope, model string) bool {
 	key := healthKey(scope, model)
-	now := time.Now()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	state, ok := h.states[key]
 	if !ok {
 		return false
 	}
-	if now.Before(state.quarantinedTil) || state.probing {
-		return true
-	}
-	return false
+	return !state.quarantinedTil.IsZero()
 }
 
 // Filter removes quarantined models while preserving the provider catalog.
@@ -109,6 +105,72 @@ func (h *ModelHealth) RecordSuccess(scope, model string) {
 	if failures := h.recentFailures[scope]; failures != nil {
 		delete(failures, model)
 	}
+}
+
+// RecordProbeSuccess clears probe state and makes the model visible again.
+func (h *ModelHealth) RecordProbeSuccess(scope, model string) {
+	h.RecordSuccess(scope, model)
+}
+
+// BeginProbe reserves one background/recovery probe for a model.
+func (h *ModelHealth) BeginProbe(scope, model string) bool {
+	if model == "" {
+		return false
+	}
+	key := healthKey(scope, model)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	state := h.states[key]
+	if state.probing {
+		return false
+	}
+	state.probing = true
+	h.states[key] = state
+	return true
+}
+
+// RecordProbeIgnored releases a probe without changing model health.
+func (h *ModelHealth) RecordProbeIgnored(scope, model string) {
+	key := healthKey(scope, model)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	state, ok := h.states[key]
+	if !ok {
+		return
+	}
+	state.probing = false
+	if state.failures == 0 && state.quarantinedTil.IsZero() {
+		delete(h.states, key)
+		return
+	}
+	h.states[key] = state
+}
+
+// RecordProbeFailure hides a model immediately until a later probe succeeds.
+func (h *ModelHealth) RecordProbeFailure(scope, model string) bool {
+	if model == "" {
+		return false
+	}
+	now := time.Now()
+	key := healthKey(scope, model)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	state := h.states[key]
+	state.failures = max(state.failures, h.threshold)
+	state.lastFailure = now
+	state.probing = false
+	state.quarantines++
+	cooldown := h.cooldown
+	for i := 1; i < state.quarantines; i++ {
+		cooldown *= 2
+		if cooldown >= h.maxCooldown {
+			cooldown = h.maxCooldown
+			break
+		}
+	}
+	state.quarantinedTil = now.Add(cooldown)
+	h.states[key] = state
+	return true
 }
 
 // RecordFailure records one logical request failure. It returns true when the
@@ -182,6 +244,19 @@ func IsModelSpecificFailure(status int, body []byte, err error) bool {
 	}
 	text := strings.ToLower(string(body))
 	return strings.Contains(text, "model") && (strings.Contains(text, "unavailable") || strings.Contains(text, "not found") || strings.Contains(text, "does not exist") || strings.Contains(text, "invalid"))
+}
+
+// ShouldQuarantineModel classifies failures that should hide a model after a
+// health probe or an inference request. Auth and caller errors are not model
+// health signals; provider availability and limit failures are.
+func ShouldQuarantineModel(status int, body []byte, err error) bool {
+	if status == 401 || status == 403 {
+		return false
+	}
+	if err != nil || status == 408 || status == 429 || status >= 500 {
+		return true
+	}
+	return IsModelSpecificFailure(status, body, nil)
 }
 
 // ValidChatResponse performs deliberately narrow validation for a non-stream

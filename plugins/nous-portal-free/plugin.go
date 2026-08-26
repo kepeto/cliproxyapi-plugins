@@ -115,6 +115,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
+	nousProber.Stop()
 	nousRefresher.Stop()
 	shutdownLoginPollers()
 }
