@@ -441,7 +441,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/dist"
-          sha256sum ./*.zip | sort > checksums.txt
+          sha256sum *.zip | sort > checksums.txt
       - name: Upload checksums.txt to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
