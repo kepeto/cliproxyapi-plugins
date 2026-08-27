@@ -107,6 +107,20 @@ func (h *ModelHealth) RecordSuccess(scope, model string) {
 	}
 }
 
+// ResetScope clears all model health state for an authentication/provider scope.
+// It is used after a successful credential refresh or re-login.
+func (h *ModelHealth) ResetScope(scope string) {
+	prefix := healthKey(scope, "")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for key := range h.states {
+		if strings.HasPrefix(key, prefix) {
+			delete(h.states, key)
+		}
+	}
+	delete(h.recentFailures, scope)
+}
+
 // RecordProbeSuccess clears probe state and makes the model visible again.
 func (h *ModelHealth) RecordProbeSuccess(scope, model string) {
 	h.RecordSuccess(scope, model)

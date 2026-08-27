@@ -60,9 +60,6 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
 	}
 	if status != 200 {
-		if status == 401 || status == 403 {
-			return errorEnvelopeWithStatus("auth_required", "nous-portal-free credential rejected", status), nil
-		}
 		recordInferenceFailure(scope, modelID, status, body, nil)
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
@@ -110,10 +107,6 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		return errorEnvelope("executor_stream_failed", err.Error()), nil
 	}
 	if status != 200 {
-		if status == 401 || status == 403 {
-			_ = reader.Close()
-			return errorEnvelopeWithStatus("auth_required", "nous-portal-free credential rejected", status), nil
-		}
 		buf := new(bytes.Buffer)
 		_, _ = io.Copy(buf, io.LimitReader(reader, 1<<20))
 		_ = reader.Close()

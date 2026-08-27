@@ -115,3 +115,16 @@ func TestShouldQuarantineModel(t *testing.T) {
 		})
 	}
 }
+
+func TestModelHealthResetScopePreservesIsolation(t *testing.T) {
+	health := NewModelHealth(1, time.Hour)
+	health.RecordProbeFailure("account-a", "model")
+	health.RecordProbeFailure("account-b", "model")
+	health.ResetScope("account-a")
+	if health.Hidden("account-a", "model") {
+		t.Fatal("reset scope left account-a hidden")
+	}
+	if !health.Hidden("account-b", "model") {
+		t.Fatal("reset scope affected account-b")
+	}
+}

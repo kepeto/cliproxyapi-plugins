@@ -53,6 +53,37 @@ func generateAccountID() string {
 	return ProviderID + "-" + randomState()
 }
 
+type refreshCall struct {
+	done   chan struct{}
+	result []byte
+	err    error
+}
+
+var refreshCalls = struct {
+	sync.Mutex
+	active map[string]*refreshCall
+}{active: make(map[string]*refreshCall)}
+
+func beginRefresh(key string) (*refreshCall, bool) {
+	refreshCalls.Lock()
+	defer refreshCalls.Unlock()
+	if call, ok := refreshCalls.active[key]; ok {
+		return call, false
+	}
+	call := &refreshCall{done: make(chan struct{})}
+	refreshCalls.active[key] = call
+	return call, true
+}
+
+func finishRefresh(key string, call *refreshCall, result []byte, err error) {
+	refreshCalls.Lock()
+	call.result = result
+	call.err = err
+	delete(refreshCalls.active, key)
+	close(call.done)
+	refreshCalls.Unlock()
+}
+
 // handleAuthParse recognizes nous-portal credential JSON files and returns the auth record.
 func handleAuthParse(raw []byte) ([]byte, error) {
 	storage := raw
@@ -139,6 +170,7 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 		expiresAt:                time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second),
 		interval:                 dc.Interval,
 		portalBaseURL:            portal,
+		inferenceBaseURL:         cfg.inferenceBaseURL(),
 		inferenceBaseURLExplicit: strings.TrimSpace(cfg.InferenceBaseURL) != "",
 		clientID:                 cfg.clientID(),
 		scope:                    cfg.scope(),
@@ -231,6 +263,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			FileName:         fileName,
 		}
 		loginStates.delete(req.State)
+		modelHealth.ResetScope(nousHealthScope(store))
 		auth := buildAuthDataWithID(store, ProviderID, fileName, "Nous Portal", store.AccountID, nil)
 		return okEnvelopeJSON(mustJSON(map[string]any{
 			"Status":  "success",
@@ -280,7 +313,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 }
 
 // handleAuthRefresh rotates the access token using the stored refresh token.
-func handleAuthRefresh(raw []byte) ([]byte, error) {
+func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 	var req struct {
 		AuthID      string `json:"AuthID"`
 		StorageJSON []byte `json:"StorageJSON"`
@@ -292,6 +325,15 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 	if store.RefreshToken == "" {
 		return errorEnvelope("refresh_failed", "no usable refresh token"), nil
 	}
+	key := ProviderID + "|" + store.AccountID + "|" + store.PortalBaseURL + "|" + store.RefreshToken
+	call, leader := beginRefresh(key)
+	if !leader {
+		<-call.done
+		return call.result, call.err
+	}
+	defer func() {
+		finishRefresh(key, call, result, resultErr)
+	}()
 
 	portal := store.PortalBaseURL
 	if portal == "" {
@@ -340,6 +382,7 @@ func handleAuthRefresh(raw []byte) ([]byte, error) {
 		FileName:         store.FileName,
 		ModelCatalog:     store.ModelCatalog,
 	}
+	modelHealth.ResetScope(nousHealthScope(next))
 	storageJSON, _ := json.Marshal(next)
 	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
 	return okEnvelopeJSON(mustJSON(map[string]any{

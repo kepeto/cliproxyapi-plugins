@@ -116,6 +116,9 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	if !store.valid() {
 		return shared.OKEnvelope(modelStaticPayload())
 	}
+	if !store.accessTokenUsable() {
+		return shared.OKEnvelope(modelStaticPayload())
+	}
 	rememberNousProbeStore(store)
 
 	scope := nousHealthScope(store)

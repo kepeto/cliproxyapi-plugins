@@ -80,6 +80,9 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		// No usable credential: fall back to static catalog without an auth update.
 		return shared.OKEnvelope(modelStaticPayload())
 	}
+	if !store.accessTokenUsable() {
+		return shared.OKEnvelope(modelStaticPayload())
+	}
 
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
 	if err != nil {

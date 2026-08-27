@@ -78,6 +78,9 @@ probe or limit/server/timeout/invalid response hides that model immediately; a
 successful later probe restores it. Normal model-specific 4xx failures use the
 three-failure threshold. SSE is buffered with 100,000-chunk, 100 MiB total, and
 1 MiB line limits.
+Expired access tokens remain parseable so CPA can invoke `auth.refresh`; refresh
+requests are serialized per account. A new login is required only when the
+refresh token is rejected or revoked.
 
 ## Files
 

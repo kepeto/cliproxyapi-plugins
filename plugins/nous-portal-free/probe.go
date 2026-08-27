@@ -40,7 +40,7 @@ func nousProbeTargets() []shared.ModelProbeTarget {
 	targets := make([]shared.ModelProbeTarget, 0)
 	seen := make(map[string]struct{})
 	for scope, store := range stores {
-		if !store.valid() {
+		if !store.accessTokenUsable() {
 			continue
 		}
 		ids := cachedFreeModelIDs(store)
@@ -63,7 +63,7 @@ func probeNousModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome {
 	nousProbeStores.RLock()
 	store, ok := nousProbeStores.byScope[target.Scope]
 	nousProbeStores.RUnlock()
-	if !ok || !store.valid() {
+	if !ok || !store.accessTokenUsable() {
 		return shared.ProbeIgnored
 	}
 

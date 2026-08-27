@@ -260,6 +260,12 @@ func (s storageJSON) structuralValid() bool {
 	return s.AccessToken != "" && s.InferenceBaseURL != ""
 }
 
-func (s storageJSON) valid() bool {
+func (s storageJSON) accessTokenUsable() bool {
 	return s.structuralValid() && (s.ExpiresAt.IsZero() || time.Now().Before(s.ExpiresAt))
+}
+
+// valid remains structural for compatibility: CPA must see expired auth and
+// receive the upstream 401 path that triggers auth.refresh.
+func (s storageJSON) valid() bool {
+	return s.structuralValid()
 }

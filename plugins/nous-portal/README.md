@@ -65,6 +65,9 @@ Normal model-specific failures quarantine after 3 failures for 15 minutes, with
 exponential backoff up to 1 hour; auth, rate-limit, provider-wide, 5xx, and
 caller errors do not change the normal failure counter. Streaming is buffered
 with 100,000-chunk, 100 MiB total, and 1 MiB line limits.
+Expired access tokens remain parseable so CPA can invoke `auth.refresh`; refresh
+requests are serialized per account. A new login is required only when the
+refresh token is rejected or revoked.
 
 ## Files
 

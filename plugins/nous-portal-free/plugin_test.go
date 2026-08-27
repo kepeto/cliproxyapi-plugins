@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -319,13 +321,13 @@ func TestAuthParsePreservesExpiredAccountIdentity(t *testing.T) {
 	}
 }
 
-func TestExpiredStorageIsStructuralButNotUsable(t *testing.T) {
+func TestExpiredStorageRemainsLoadable(t *testing.T) {
 	storage := storageJSON{
 		AccessToken:      "expired",
 		InferenceBaseURL: "https://example.test/v1",
 		ExpiresAt:        time.Now().Add(-time.Minute),
 	}
-	if !storage.structuralValid() || storage.valid() {
+	if !storage.structuralValid() || !storage.valid() || storage.accessTokenUsable() {
 		t.Fatalf("unexpected expired storage validity: %#v", storage)
 	}
 }
@@ -410,5 +412,61 @@ func TestNousProbeHidesAndRestoresModel(t *testing.T) {
 	modelHealth.RecordProbeSuccess(scope, target.Model)
 	if modelHealth.Hidden(scope, target.Model) {
 		t.Fatal("successful Nous probe did not restore model")
+	}
+}
+
+func TestAuthRefreshSingleflight(t *testing.T) {
+	var requests atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		close(entered)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-token","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	storage, err := json.Marshal(storageJSON{
+		AccessToken:      "expired-token",
+		RefreshToken:     "old-refresh",
+		ExpiresAt:        time.Now().Add(-time.Hour),
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL + "/v1",
+		AccountID:        "singleflight-account",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"StorageJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	responses := make([][]byte, 8)
+	var wg sync.WaitGroup
+	for i := range responses {
+		wg.Go(func() {
+			<-start
+			responses[i], _ = handleAuthRefresh(request)
+		})
+	}
+	close(start)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("refresh request did not reach upstream")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("upstream refresh calls = %d, want 1", got)
+	}
+	close(release)
+	wg.Wait()
+	for i, response := range responses {
+		if len(response) == 0 {
+			t.Fatalf("response %d is empty", i)
+		}
 	}
 }
