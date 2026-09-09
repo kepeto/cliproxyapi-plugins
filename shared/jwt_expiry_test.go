@@ -21,20 +21,20 @@ func TestJWTExpiry(t *testing.T) {
 }
 
 func TestJWTClaim(t *testing.T) {
-    payload := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"user@example.test","member_spend_usd":1.5,"empty":"","n":null}`))
-    token := fmt.Sprintf("header.%s.signature", payload)
-    if got, ok := JWTClaim(token, "email"); !ok || got != "user@example.test" {
-        t.Fatalf("JWTClaim email = %q, %v", got, ok)
-    }
-    if got, ok := JWTClaim(token, "member_spend_usd"); !ok || got != "1.5" {
-        t.Fatalf("JWTClaim spend = %q, %v", got, ok)
-    }
-    for _, missing := range []string{"absent", "empty", "n"} {
-        if _, ok := JWTClaim(token, missing); ok {
-            t.Fatalf("JWTClaim accepted %q", missing)
-        }
-    }
-    if _, ok := JWTClaim("opaque", "email"); ok {
-        t.Fatal("JWTClaim accepted opaque token")
-    }
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"user@example.test","member_spend_usd":1.5,"empty":"","n":null}`))
+	token := fmt.Sprintf("header.%s.signature", payload)
+	if got, ok := JWTClaim(token, "email"); !ok || got != "user@example.test" {
+		t.Fatalf("JWTClaim email = %q, %v", got, ok)
+	}
+	if got, ok := JWTClaim(token, "member_spend_usd"); !ok || got != "1.5" {
+		t.Fatalf("JWTClaim spend = %q, %v", got, ok)
+	}
+	for _, missing := range []string{"absent", "empty", "n"} {
+		if _, ok := JWTClaim(token, missing); ok {
+			t.Fatalf("JWTClaim accepted %q", missing)
+		}
+	}
+	if _, ok := JWTClaim("opaque", "email"); ok {
+		t.Fatal("JWTClaim accepted opaque token")
+	}
 }
