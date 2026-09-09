@@ -166,6 +166,73 @@ func TestFilterFreeModelsStrictAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestFetchPortalFreeModelsMatchesHermesList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/nous/recommended-models" {
+			t.Errorf("unexpected portal path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"freeRecommendedModels":[{"modelName":"upstage/solar-pro4:free"},{"modelName":"poolside/laguna-s-2.1:free"},{"modelName":"upstage/solar-pro4:free"},{"modelName":""}]}`))
+	}))
+	defer server.Close()
+	got := fetchPortalFreeModels(server.URL)
+	if len(got) != 2 || got[0].ID != "upstage/solar-pro4:free" || got[1].ID != "poolside/laguna-s-2.1:free" {
+		t.Fatalf("unexpected portal free models: %#v", got)
+	}
+}
+
+func TestUnionFreeModelsDeduplicates(t *testing.T) {
+	merged := unionFreeModels(
+		[]rawCatalogModel{{ID: "upstage/solar-pro4:free"}, {ID: ""}},
+		[]rawCatalogModel{{ID: "upstage/solar-pro4:free"}, {ID: "tencent/hy3:free"}},
+	)
+	if len(merged) != 2 || merged[0].ID != "upstage/solar-pro4:free" || merged[1].ID != "tencent/hy3:free" {
+		t.Fatalf("unexpected union: %#v", merged)
+	}
+}
+
+func TestModelForAuthUnionsPortalAndInferenceCatalogs(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/nous/recommended-models", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"freeRecommendedModels":[{"modelName":"poolside/laguna-s-2.1:free"}]}`))
+	})
+	mux.HandleFunc("/models", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"tencent/hy3:free","name":"hy3"}]}`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	storage, err := json.Marshal(storageJSON{
+		AccessToken:      "token",
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL,
+		AccountID:        "union-account",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"StorageJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleModelForAuth(request)
+	var envelope struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Models []map[string]any `json:"Models"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Result.Models) != 2 {
+		t.Fatalf("expected portal+inference union, got: %s", response)
+	}
+}
+
 func TestModelForAuthUsesFilteredCacheOnFetchError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -181,6 +248,7 @@ func TestModelForAuthUsesFilteredCacheOnFetchError(t *testing.T) {
 	}
 	store := storageJSON{
 		AccessToken:      "token",
+		PortalBaseURL:    server.URL,
 		InferenceBaseURL: server.URL,
 		AccountID:        "account-a",
 		ModelCatalog:     cache,
@@ -218,18 +286,23 @@ func TestModelForAuthUsesFilteredCacheOnFetchError(t *testing.T) {
 
 func TestNousFreeReconfigureRetargetsRefresher(t *testing.T) {
 	originalURL := currentNousInferenceURL()
+	originalPortal := currentNousPortalURL()
 	originalRefresher := nousRefresher
 	defer func() {
 		nousRefresher = originalRefresher
 		setNousInferenceURL(originalURL)
+		setNousPortalURL(originalPortal)
 	}()
 	nousRefresher = shared.NewModelRefresher(time.Hour, nil, nil)
 
-	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\n"))
+	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\nportal_base_url: https://portal.example.test\n"))
 	if got := currentNousInferenceURL(); got != "https://example.test/custom/v1" {
 		t.Fatalf("currentNousInferenceURL() = %q", got)
 	}
-	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\n"))
+	if got := currentNousPortalURL(); got != "https://portal.example.test" {
+		t.Fatalf("currentNousPortalURL() = %q", got)
+	}
+	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\nportal_base_url: https://portal.example.test\n"))
 	if got := currentNousInferenceURL(); got != "https://example.test/custom/v1" {
 		t.Fatalf("idempotent endpoint update changed URL: %q", got)
 	}

@@ -11,15 +11,17 @@ import (
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
 
-// fallbackModels is an audited static catalog of known free-tier IDs. It is
-// used only when the live catalog is unavailable or no login exists; paid
-// models must never enter this fallback path.
+// fallbackModels mirrors the Nous Portal freeRecommendedModels list shown by
+// Hermes. It is used only when the live catalog is unavailable or no login
+// exists; paid models must never enter this fallback path.
 var fallbackModels = []string{
-	"minimax/minimax-m2.5:free",
-	"tencent/hy3:free",
-	"stepfun/step-3.7-flash:free",
 	"upstage/solar-pro4:free",
 	"meituan/longcat-2.0:free",
+	"poolside/laguna-s-2.1:free",
+	"poolside/laguna-xs-2.1:free",
+	"inclusionai/ling-3.0-flash-fin:free",
+	"inclusionai/ling-3.0-flash-sante:free",
+	"stepfun/step-3.7-flash:free",
 }
 
 func modelStaticPayload() string {
@@ -122,15 +124,23 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	rememberNousProbeStore(store)
 
 	scope := nousHealthScope(store)
+	// Portal recommended free models need no auth and match the Hermes free
+	// list. Union them with the authenticated inference catalog so account
+	// entitlements can only add models, never remove Portal free models.
+	portalFree := fetchPortalFreeModels(firstNonEmpty(store.PortalBaseURL, currentNousPortalURL()))
 	catalog, err := fetchModelCatalog(store.InferenceBaseURL, store.AccessToken)
-	if err != nil {
+	if err != nil && len(portalFree) == 0 {
 		if cached, ok := cachedModelPayload(store, scope); ok {
 			return shared.OKEnvelope(cached)
 		}
 		return shared.OKEnvelope(fallbackModelPayload(scope))
 	}
+	var inferenceFree []rawCatalogModel
+	if err == nil {
+		inferenceFree = filterFreeModels(catalog)
+	}
 
-	freeModels := filterFreeModels(catalog)
+	freeModels := unionFreeModels(portalFree, inferenceFree)
 	allowed := make(map[string]struct{}, len(freeModels))
 	models := make([]map[string]any, 0, len(freeModels))
 	for _, m := range freeModels {
@@ -187,6 +197,79 @@ func filterFreeModels(catalog []rawCatalogModel) []rawCatalogModel {
 		freeModels = append(freeModels, m)
 	}
 	return freeModels
+}
+
+// portalRecommendedModel is one entry of the Portal recommended-models
+// endpoint. Only modelName is needed; tokenPrice/source are informational.
+type portalRecommendedModel struct {
+	ModelName string `json:"modelName"`
+	Source    string `json:"source"`
+}
+
+// fetchPortalFreeModels returns the Portal freeRecommendedModels list, the
+// same source Hermes uses for its free catalog. The endpoint is public and
+// needs no authentication.
+func fetchPortalFreeModels(portalBaseURL string) []rawCatalogModel {
+	url := portalBaseURL
+	if url == "" {
+		url = defaultPortalBaseURL
+	}
+	url = shared.TrimHTTP(url) + "/api/nous/recommended-models"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != 200 {
+		return nil
+	}
+	var payload struct {
+		Free []portalRecommendedModel `json:"freeRecommendedModels"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	free := make([]rawCatalogModel, 0, len(payload.Free))
+	seen := make(map[string]struct{}, len(payload.Free))
+	for _, m := range payload.Free {
+		id := strings.TrimSpace(m.ModelName)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		free = append(free, rawCatalogModel{ID: id, Name: id})
+	}
+	return free
+}
+
+// unionFreeModels merges portal recommended free models with the
+// authenticated inference catalog, deduplicated by model ID.
+func unionFreeModels(portal, inference []rawCatalogModel) []rawCatalogModel {
+	merged := make([]rawCatalogModel, 0, len(portal)+len(inference))
+	seen := make(map[string]struct{}, len(portal)+len(inference))
+	for _, list := range [][]rawCatalogModel{portal, inference} {
+		for _, m := range list {
+			if m.ID == "" {
+				continue
+			}
+			if _, ok := seen[m.ID]; ok {
+				continue
+			}
+			seen[m.ID] = struct{}{}
+			merged = append(merged, m)
+		}
+	}
+	return merged
 }
 
 type rawCatalogModel struct {

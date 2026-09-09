@@ -160,6 +160,7 @@ func applyHostAliases(raw []byte) {
 func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setNousInferenceURL(cfg.inferenceBaseURL())
+	setNousPortalURL(cfg.portalBaseURL())
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
 }
@@ -177,11 +178,31 @@ var nousRefresher = shared.NewModelRefresher(
 	fetchNousModels,
 	healthCheckNous,
 )
-
 var (
 	nousEndpointMu   sync.RWMutex
 	nousInferenceURL = defaultInferenceBaseURL
+	nousPortalURL    = defaultPortalBaseURL
 )
+
+func currentNousPortalURL() string {
+	nousEndpointMu.RLock()
+	defer nousEndpointMu.RUnlock()
+	return nousPortalURL
+}
+
+func setNousPortalURL(url string) {
+	url = trimHTTP(url)
+	if url == "" {
+		url = defaultPortalBaseURL
+	}
+	nousEndpointMu.Lock()
+	changed := nousPortalURL != url
+	nousPortalURL = url
+	nousEndpointMu.Unlock()
+	if changed {
+		nousRefresher.Reset()
+	}
+}
 
 func currentNousInferenceURL() string {
 	nousEndpointMu.RLock()
@@ -203,21 +224,11 @@ func setNousInferenceURL(url string) {
 	}
 }
 
-// modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
-var modelAliases = shared.NewAliasTable()
-var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
-
-func init() {
-	nousRefresher.Start()
-}
-
-// fetchNousModels retrieves the current free model list from Nous Portal.
+// fetchNousModels retrieves the current free model list from the Nous Portal
+// recommended-models endpoint, the same source Hermes uses for its free list.
+// It needs no authentication.
 func fetchNousModels() ([]string, error) {
-	catalog, err := fetchModelCatalog(currentNousInferenceURL(), "")
-	if err != nil {
-		return nil, err
-	}
-	free := filterFreeModels(catalog)
+	free := fetchPortalFreeModels(currentNousPortalURL())
 	ids := make([]string, 0, len(free))
 	for _, m := range free {
 		ids = append(ids, m.ID)
@@ -228,10 +239,17 @@ func fetchNousModels() ([]string, error) {
 	return ids, nil
 }
 
-// healthCheckNous checks if Nous Portal /models endpoint is alive.
+// healthCheckNous checks if the Nous Portal recommended-models endpoint is alive.
 func healthCheckNous() bool {
-	_, err := fetchModelCatalog(currentNousInferenceURL(), "")
-	return err == nil
+	return len(fetchPortalFreeModels(currentNousPortalURL())) > 0
+}
+
+// modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
+var modelAliases = shared.NewAliasTable()
+var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
+
+func init() {
+	nousRefresher.Start()
 }
 
 // storageJSON is the persisted auth blob stored by the host under the "nous-portal-free" type.

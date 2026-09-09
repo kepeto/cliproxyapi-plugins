@@ -19,14 +19,23 @@ Same as `nous-portal`:
    cached free catalog.
 ## Model Filtering
 
+The free catalog unions two sources:
+
+- Portal `freeRecommendedModels` (same list Hermes shows; public, no auth)
+- Authenticated inference `/v1/models` filtered to free entries
+
 Only models matching these criteria are shown:
 - Model ID ends with `:free`
 - OR model name contains "free" (case-insensitive)
 
-Example free models:
-- `stepfun/step-3.7-flash:free`
-- `poolside/laguna-s-2.1:free`
+Example free models (mirrors Hermes):
+- `upstage/solar-pro4:free`
 - `meituan/longcat-2.0:free`
+- `poolside/laguna-s-2.1:free`
+- `poolside/laguna-xs-2.1:free`
+- `inclusionai/ling-3.0-flash-fin:free`
+- `inclusionai/ling-3.0-flash-sante:free`
+- `stepfun/step-3.7-flash:free`
 
 ## Build
 
