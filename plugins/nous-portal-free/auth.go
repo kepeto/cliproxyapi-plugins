@@ -132,8 +132,15 @@ func handleAuthParse(raw []byte) ([]byte, error) {
 	if id == "" {
 		id = ProviderID
 	}
+	// The access JWT carries the account email and spend/quota hints, the
+	// same source Hermes uses. Surface them so the dashboard can show who
+	// owns the session and how much free quota remains.
+	identity, extra := nousIdentity(store)
+	if identity != "" && !strings.Contains(label, identity) {
+		label += " (" + identity + ")"
+	}
 
-	auth := buildAuthDataWithID(store, ProviderID, fileName, label, id, nil)
+	auth := buildAuthDataWithID(store, ProviderID, fileName, label, id, extra)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Handled": true,
 		"Auth":    auth,
@@ -268,7 +275,12 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 		rememberNousProbeStore(store)
 		loginStates.delete(req.State)
 		modelHealth.ResetScope(nousHealthScope(store))
-		auth := buildAuthDataWithID(store, ProviderID, fileName, "Nous Portal Free", store.AccountID, nil)
+		identity, extra := nousIdentity(store)
+		label := "Nous Portal Free"
+		if identity != "" {
+			label += " (" + identity + ")"
+		}
+		auth := buildAuthDataWithID(store, ProviderID, fileName, label, store.AccountID, extra)
 		return okEnvelopeJSON(mustJSON(map[string]any{
 			"Status":  "success",
 			"Message": "Nous Portal login complete",
@@ -414,6 +426,42 @@ func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 		"Auth":             auth,
 		"NextRefreshAfter": nextRefreshAfter(next.ExpiresAt),
 	}))
+}
+
+// nousIdentity extracts the human-facing account identity and quota hints
+// from the access JWT payload, the same source Hermes reads. Claims are
+// display metadata only; they are never used for authentication decisions.
+// Expired tokens still decode, so expired sessions keep their identity.
+func nousIdentity(store storageJSON) (string, map[string]any) {
+	var extra map[string]any
+	set := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		extra[key] = value
+	}
+	email, _ := shared.JWTClaim(store.AccessToken, "email")
+	set("username", email)
+	set("email", email)
+	if tier, ok := shared.JWTClaim(store.AccessToken, "subscription_tier"); ok {
+		set("subscription_tier", tier)
+	}
+	if spend, ok := shared.JWTClaim(store.AccessToken, "member_spend_usd"); ok {
+		set("spend_usd", spend)
+	}
+	if cap, ok := shared.JWTClaim(store.AccessToken, "member_spend_cap_usd"); ok {
+		set("spend_cap_usd", cap)
+	}
+	if remaining, ok := shared.JWTClaim(store.AccessToken, "member_spend_cap_remaining_usd"); ok {
+		set("spend_remaining_usd", remaining)
+	}
+	if exceeded, ok := shared.JWTClaim(store.AccessToken, "member_spend_cap_exceeded"); ok {
+		set("spend_cap_exceeded", exceeded)
+	}
+	return email, extra
 }
 
 // --- helpers ---

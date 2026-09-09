@@ -3,6 +3,7 @@ package shared
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,4 +30,43 @@ func JWTExpiry(token string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return time.Unix(int64(seconds), 0), true
+}
+
+// JWTClaim extracts one display claim (string or number) from a JWT payload
+// without validating the signature. It is for human-facing metadata only
+// (username, quota hints) and must never be used as an authentication or
+// authorization decision.
+func JWTClaim(token, name string) (string, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return "", false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", false
+	}
+	var claims map[string]json.RawMessage
+	if json.Unmarshal(payload, &claims) != nil {
+		return "", false
+	}
+	raw, ok := claims[name]
+	if !ok || len(raw) == 0 {
+		return "", false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if strings.TrimSpace(s) == "" {
+			return "", false
+		}
+		return s, true
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		return strings.TrimRight(strings.TrimRight(fmtFloat(f), "0"), "."), true
+	}
+	return "", false
+}
+
+func fmtFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', 6, 64)
 }

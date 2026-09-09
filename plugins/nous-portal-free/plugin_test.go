@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -305,6 +307,44 @@ func TestNousFreeReconfigureRetargetsRefresher(t *testing.T) {
 	applyConfig([]byte("inference_base_url: https://example.test/custom/v1\nportal_base_url: https://portal.example.test\n"))
 	if got := currentNousInferenceURL(); got != "https://example.test/custom/v1" {
 		t.Fatalf("idempotent endpoint update changed URL: %q", got)
+	}
+}
+
+func TestAuthParseExposesEmailAndQuota(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"user@example.test","subscription_tier":"free","member_spend_usd":0.42,"member_spend_cap_usd":5,"member_spend_cap_remaining_usd":4.58}`))
+	storage, err := json.Marshal(map[string]any{
+		"type":               ProviderID,
+		"access_token":       "header." + payload + ".signature",
+		"refresh_token":      "refresh-token",
+		"inference_base_url": "https://example.test/v1",
+		"account_id":         "account-9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"FileName": "nous-portal-free.json", "RawJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthParse(request)
+	var result struct {
+		Result struct {
+			Handled bool `json:"Handled"`
+			Auth    struct {
+				Label    string         `json:"Label"`
+				Metadata map[string]any `json:"Metadata"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Result.Handled || !strings.Contains(result.Result.Auth.Label, "user@example.test") {
+		t.Fatalf("identity missing from label: %s", response)
+	}
+	meta := result.Result.Auth.Metadata
+	if meta["username"] != "user@example.test" || meta["spend_usd"] != "0.42" || meta["spend_remaining_usd"] != "4.58" {
+		t.Fatalf("quota metadata incorrect: %s", response)
 	}
 }
 
