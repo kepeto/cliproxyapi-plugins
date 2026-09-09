@@ -19,6 +19,9 @@ const (
 	defaultClientID         = "hermes-cli"
 	defaultScope            = "inference:invoke"
 	defaultRequestTimeout   = 15 * time.Second
+	// invokeJWTMinTTL mirrors Hermes NOUS_INVOKE_JWT_MIN_TTL_SECONDS:
+	// credentials inside this lead are treated as expired.
+	invokeJWTMinTTL = 120 * time.Second
 )
 
 // deviceCodeResponse is the OAuth 2.0 device authorization response.
@@ -272,18 +275,30 @@ type storageJSON struct {
 	AccountID        string    `json:"account_id,omitempty"`
 	FileName         string    `json:"file_name,omitempty"`
 	ModelCatalog     []byte    `json:"model_catalog,omitempty"`
+	Email            string    `json:"email,omitempty"`
+	OrgName          string    `json:"org_name,omitempty"`
 }
 
 func (s storageJSON) structuralValid() bool {
 	return s.AccessToken != "" && s.InferenceBaseURL != ""
 }
-
 func (s storageJSON) accessTokenUsable() bool {
-	return s.structuralValid() && (s.ExpiresAt.IsZero() || time.Now().Before(s.ExpiresAt))
+	if !s.structuralValid() {
+		return false
+	}
+	expiresAt := s.ExpiresAt
+	if expiresAt.IsZero() {
+		if expiry, ok := shared.JWTExpiry(s.AccessToken); ok {
+			expiresAt = expiry
+		}
+	}
+	// Mirror Hermes NOUS_INVOKE_JWT_MIN_TTL_SECONDS: a token within the lead
+	// is treated as expired so the host refreshes before mid-flight expiry.
+	return expiresAt.IsZero() || time.Now().Add(invokeJWTMinTTL).Before(expiresAt)
 }
 
-// valid remains structural for compatibility: CPA must see expired auth and
-// receive the upstream 401 path that triggers auth.refresh.
+// valid is the executor gate. Expired credentials must be rejected here so CPA
+// invokes auth.refresh instead of sending a stale Bearer token upstream.
 func (s storageJSON) valid() bool {
-	return s.structuralValid()
+	return s.accessTokenUsable()
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +16,10 @@ import (
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
 )
+
+// accountFetchTimeout bounds the best-effort Portal account lookup used only
+// for display labeling; login and refresh never depend on it.
+const accountFetchTimeout = 10 * time.Second
 
 var (
 	loginCount int
@@ -272,6 +278,9 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			AccountID:        generateAccountID(),
 			FileName:         fileName,
 		}
+		// Best-effort display identity: NAS-track JWTs carry no email claim, so
+		// read it from the Portal account endpoint. Failures leave login intact.
+		store.Email, store.OrgName = fetchPortalAccountIdentity(ls.portalBaseURL, tok.AccessToken)
 		rememberNousProbeStore(store)
 		loginStates.delete(req.State)
 		modelHealth.ResetScope(nousHealthScope(store))
@@ -417,6 +426,8 @@ func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 		AccountID:        store.AccountID,
 		FileName:         store.FileName,
 		ModelCatalog:     store.ModelCatalog,
+		Email:            store.Email,
+		OrgName:          store.OrgName,
 	}
 	modelHealth.ResetScope(nousHealthScope(next))
 	rememberNousProbeStore(next)
@@ -428,10 +439,53 @@ func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 	}))
 }
 
-// nousIdentity extracts the human-facing account identity and quota hints
-// from the access JWT payload, the same source Hermes reads. Claims are
-// display metadata only; they are never used for authentication decisions.
-// Expired tokens still decode, so expired sessions keep their identity.
+// fetchPortalAccountIdentity returns the Portal account email and organisation
+// name for an access token. Best-effort: any failure yields empty strings so
+// login never depends on this display metadata. Tokens never enter errors.
+func fetchPortalAccountIdentity(portalBaseURL, accessToken string) (email, orgName string) {
+	portal := strings.TrimRight(strings.TrimSpace(portalBaseURL), "/")
+	if portal == "" || strings.TrimSpace(accessToken) == "" {
+		return "", ""
+	}
+	req, err := http.NewRequest(http.MethodGet, portal+"/api/oauth/account", nil)
+	if err != nil {
+		return "", ""
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	client := &http.Client{Timeout: accountFetchTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", ""
+	}
+	var payload struct {
+		User struct {
+			Email string `json:"email"`
+		} `json:"user"`
+		Organisation struct {
+			Name string `json:"name"`
+		} `json:"organisation"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(payload.User.Email), strings.TrimSpace(payload.Organisation.Name)
+}
+
+// nousIdentity extracts the human-facing account identity and quota hints.
+// The display identity prefers the Portal account email captured at login,
+// then the organisation name, then the access JWT email claim: NAS-track JWTs
+// carry no email claim. Identity values are display metadata only; they are
+// never used for authentication decisions. Expired tokens still decode, so
+// expired sessions keep their identity.
 func nousIdentity(store storageJSON) (string, map[string]any) {
 	var extra map[string]any
 	set := func(key, value string) {
@@ -443,9 +497,13 @@ func nousIdentity(store storageJSON) (string, map[string]any) {
 		}
 		extra[key] = value
 	}
-	email, _ := shared.JWTClaim(store.AccessToken, "email")
-	set("username", email)
+	email := strings.TrimSpace(store.Email)
+	if email == "" {
+		email, _ = shared.JWTClaim(store.AccessToken, "email")
+	}
+	set("username", firstNonEmpty(email, store.OrgName))
 	set("email", email)
+	set("org_name", store.OrgName)
 	if tier, ok := shared.JWTClaim(store.AccessToken, "subscription_tier"); ok {
 		set("subscription_tier", tier)
 	}
@@ -461,7 +519,7 @@ func nousIdentity(store storageJSON) (string, map[string]any) {
 	if exceeded, ok := shared.JWTClaim(store.AccessToken, "member_spend_cap_exceeded"); ok {
 		set("spend_cap_exceeded", exceeded)
 	}
-	return email, extra
+	return firstNonEmpty(email, strings.TrimSpace(store.OrgName)), extra
 }
 
 // --- helpers ---

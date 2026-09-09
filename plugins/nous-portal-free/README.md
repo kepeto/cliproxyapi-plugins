@@ -17,6 +17,10 @@ Same as `nous-portal`:
 3. After authorization, credentials are stored as `nous-portal-free.json`,
    `nous-portal-free-2.json`, etc.; refresh preserves the account, file, and
    cached free catalog.
+4. At login the plugin reads the Portal account email and organisation name
+   (`GET /api/oauth/account`, best-effort) for the dashboard label. NAS-track
+   JWTs carry no email claim, so GitHub-linked logins label by organisation
+   name (e.g. `Nous Portal Free (kepeto's account)`).
 ## Model Filtering
 
 The free catalog unions two sources:

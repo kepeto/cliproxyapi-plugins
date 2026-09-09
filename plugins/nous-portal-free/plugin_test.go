@@ -384,6 +384,106 @@ func TestLoginPollUnknownOAuthErrorIsTerminal(t *testing.T) {
 		t.Fatal("terminal OAuth error left login state active")
 	}
 }
+func TestLoginPollStoresPortalAccountIdentity(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"login-token","refresh_token":"login-refresh","expires_in":3600}`))
+	})
+	mux.HandleFunc("/api/oauth/account", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer login-token" {
+			t.Errorf("account lookup used wrong bearer: %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"user":{"email":"","privy_did":"did:privy:test"},"organisation":{"name":"kepeto's account"}}`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	state := "identity-login"
+	loginStates.put(state, &loginState{
+		deviceCode:       "device",
+		expiresAt:        time.Now().Add(time.Hour),
+		interval:         1,
+		portalBaseURL:    server.URL,
+		inferenceBaseURL: server.URL + "/v1",
+		clientID:         "client",
+		scope:            "scope",
+		accountFileName:  "nous-portal-free-9.json",
+	})
+	request, err := json.Marshal(map[string]any{"State": state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthLoginPoll(request)
+	var envelope struct {
+		Result struct {
+			Status string `json:"Status"`
+			Auth   struct {
+				Label       string         `json:"Label"`
+				StorageJSON []byte         `json:"StorageJSON"`
+				Metadata    map[string]any `json:"Metadata"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Result.Status != "success" {
+		t.Fatalf("login failed: %s", response)
+	}
+	if !strings.Contains(envelope.Result.Auth.Label, "kepeto's account") {
+		t.Fatalf("org fallback missing from label: %s", response)
+	}
+	stored := decodeStorage(envelope.Result.Auth.StorageJSON)
+	if stored.OrgName != "kepeto's account" {
+		t.Fatalf("org name not persisted: %#v", stored)
+	}
+	if envelope.Result.Auth.Metadata["org_name"] != "kepeto's account" {
+		t.Fatalf("org metadata missing: %s", response)
+	}
+}
+
+func TestLoginPollSurvivesAccountLookupFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"login-token","refresh_token":"login-refresh","expires_in":3600}`))
+	})
+	mux.HandleFunc("/api/oauth/account", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	state := "identity-login-failure"
+	loginStates.put(state, &loginState{
+		deviceCode:       "device",
+		expiresAt:        time.Now().Add(time.Hour),
+		interval:         1,
+		portalBaseURL:    server.URL,
+		inferenceBaseURL: server.URL + "/v1",
+		clientID:         "client",
+		scope:            "scope",
+		accountFileName:  "nous-portal-free-9.json",
+	})
+	request, err := json.Marshal(map[string]any{"State": state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthLoginPoll(request)
+	var envelope struct {
+		Result struct {
+			Status string `json:"Status"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Result.Status != "success" {
+		t.Fatalf("account lookup failure broke login: %s", response)
+	}
+}
 
 func TestAuthRefreshPreservesCatalogAndStoredEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +535,44 @@ func TestAuthRefreshPreservesCatalogAndStoredEndpoint(t *testing.T) {
 		t.Fatalf("refresh dropped model catalog: %q", refreshed.ModelCatalog)
 	}
 }
+func TestAuthRefreshPreservesAccountIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-token","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	storage, err := json.Marshal(storageJSON{
+		AccessToken:      "old-token",
+		RefreshToken:     "refresh-token",
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL + "/v1",
+		AccountID:        "account-id",
+		Email:            "",
+		OrgName:          "kepeto's account",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"StorageJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthRefresh(request)
+	var envelope struct {
+		Result struct {
+			Auth struct {
+				StorageJSON []byte `json:"StorageJSON"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed := decodeStorage(envelope.Result.Auth.StorageJSON); refreshed.OrgName != "kepeto's account" {
+		t.Fatalf("refresh dropped org identity: %#v", refreshed)
+	}
+}
 
 func TestAuthParsePreservesExpiredAccountIdentity(t *testing.T) {
 	fileName := "nous-portal-free-2.json"
@@ -477,8 +615,26 @@ func TestExpiredStorageRemainsLoadable(t *testing.T) {
 		InferenceBaseURL: "https://example.test/v1",
 		ExpiresAt:        time.Now().Add(-time.Minute),
 	}
-	if !storage.structuralValid() || !storage.valid() || storage.accessTokenUsable() {
+	if !storage.structuralValid() || storage.valid() || storage.accessTokenUsable() {
 		t.Fatalf("unexpected expired storage validity: %#v", storage)
+	}
+}
+func TestNearExpiryTokenTriggersRefresh(t *testing.T) {
+	near := storageJSON{
+		AccessToken:      "token",
+		InferenceBaseURL: "https://example.test/v1",
+		ExpiresAt:        time.Now().Add(60 * time.Second),
+	}
+	if near.accessTokenUsable() || near.valid() {
+		t.Fatal("token inside refresh lead was accepted")
+	}
+	fresh := storageJSON{
+		AccessToken:      "token",
+		InferenceBaseURL: "https://example.test/v1",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	}
+	if !fresh.accessTokenUsable() || !fresh.valid() {
+		t.Fatal("healthy token was rejected")
 	}
 }
 

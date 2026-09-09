@@ -59,7 +59,10 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		recordInferenceFailure(scope, modelID, status, body, err)
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
 	}
-	if status != 200 {
+	if status == http.StatusUnauthorized {
+		return errorEnvelopeWithStatus("auth_required", "Nous inference credential rejected; refresh required", status), nil
+	}
+	if status != http.StatusOK {
 		recordInferenceFailure(scope, modelID, status, body, nil)
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
