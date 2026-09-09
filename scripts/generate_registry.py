@@ -49,14 +49,14 @@ PLUGIN_METADATA = {
     "nous-portal": {
         "name": "Nous Portal",
         "description": "OAuth device-code authentication for Nous Portal inference API",
-        "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+        "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
         "homepage": "https://portal.nousresearch.com",
         "tags": ["nous", "portal", "oauth", "inference"],
     },
     "nous-portal-free": {
         "name": "Nous Portal Free",
         "description": "Nous Portal free models plugin for CLIProxyAPI",
-        "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+        "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
         "homepage": "https://portal.nousresearch.com",
         "tags": ["nous", "portal", "free", "oauth"],
     },

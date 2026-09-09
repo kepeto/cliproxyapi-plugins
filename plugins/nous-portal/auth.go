@@ -434,8 +434,8 @@ func buildAuthData(store storageJSON, provider, fileName, label string, extraMet
 		"type":            provider,
 		"username":        "nous-portal",
 		"portal_base_url": store.PortalBaseURL,
-		"logo":            "https://hermes-agent.nousresearch.com/favicon.ico",
-		"icon":            "https://hermes-agent.nousresearch.com/favicon.ico",
+		"logo":            "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
+		"icon":            "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
 		"description":     "Nous Portal OAuth",
 		"homepage":        "https://portal.nousresearch.com",
 	}

@@ -8,7 +8,7 @@
       "author": "kepeto",
       "version": "0.1.31",
       "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-      "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+      "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
       "homepage": "https://portal.nousresearch.com",
       "license": "MIT",
       "tags": [
@@ -72,7 +72,7 @@
       "author": "kepeto",
       "version": "0.1.31",
       "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-      "logo": "https://hermes-agent.nousresearch.com/favicon.ico",
+      "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
       "homepage": "https://portal.nousresearch.com",
       "license": "MIT",
       "tags": [
