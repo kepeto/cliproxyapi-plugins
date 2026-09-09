@@ -23,8 +23,15 @@ func randomState() string {
 	return shared.RandomState()
 }
 
-// httpPostForm performs an OAuth form-post and decodes the JSON body into out.
+// httpPostForm performs an OAuth form-post and returns the JSON response body.
 func httpPostForm(portalBaseURL, path string, values map[string]string, timeout time.Duration) (int, []byte, error) {
+	return httpPostFormWithHeaders(portalBaseURL, path, values, nil, timeout)
+}
+
+// httpPostFormWithHeaders performs an OAuth form-post with additional headers.
+// Refresh-token headers are kept separate from the form so rotating secrets do
+// not get duplicated into request bodies or logs by intermediary tooling.
+func httpPostFormWithHeaders(portalBaseURL, path string, values map[string]string, headers map[string]string, timeout time.Duration) (int, []byte, error) {
 	form := make([]string, 0, len(values))
 	for k, v := range values {
 		form = append(form, k+"="+shared.URLEncode(v))
@@ -36,6 +43,9 @@ func httpPostForm(portalBaseURL, path string, values map[string]string, timeout 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {

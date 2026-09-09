@@ -235,6 +235,43 @@ func TestNousFreeReconfigureRetargetsRefresher(t *testing.T) {
 	}
 }
 
+func TestLoginPollUnknownOAuthErrorIsTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"invalid client"}`))
+	}))
+	defer server.Close()
+
+	state := "terminal-oauth-error"
+	loginStates.put(state, &loginState{
+		deviceCode:    "device",
+		expiresAt:     time.Now().Add(time.Hour),
+		interval:      1,
+		portalBaseURL: server.URL,
+		clientID:      "client",
+		scope:         "scope",
+	})
+	request, err := json.Marshal(map[string]any{"State": state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthLoginPoll(request)
+	var envelope struct {
+		Result struct {
+			Status string `json:"Status"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Result.Status != "error" {
+		t.Fatalf("unknown OAuth error remained pending: %s", response)
+	}
+	if _, ok := loginStates.get(state); ok {
+		t.Fatal("terminal OAuth error left login state active")
+	}
+}
+
 func TestAuthRefreshPreservesCatalogAndStoredEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -412,6 +449,85 @@ func TestNousProbeHidesAndRestoresModel(t *testing.T) {
 	modelHealth.RecordProbeSuccess(scope, target.Model)
 	if modelHealth.Hidden(scope, target.Model) {
 		t.Fatal("successful Nous probe did not restore model")
+	}
+}
+
+func TestAuthRefreshUsesDocumentedHeaderAndRotatesToken(t *testing.T) {
+	var gotHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Nous-Refresh-Token")
+		if r.FormValue("refresh_token") != "" {
+			t.Errorf("refresh token leaked into form body")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-token","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	storage, err := json.Marshal(storageJSON{
+		AccessToken:      "old-token",
+		RefreshToken:     "old-refresh",
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL + "/v1",
+		AccountID:        "header-account",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"StorageJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthRefresh(request)
+	var envelope struct {
+		Result struct {
+			Auth struct {
+				StorageJSON []byte `json:"StorageJSON"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := decodeStorage(envelope.Result.Auth.StorageJSON)
+	if gotHeader != "old-refresh" || refreshed.AccessToken != "new-token" || refreshed.RefreshToken != "new-refresh" {
+		t.Fatalf("refresh header/token mapping incorrect: header=%q storage=%#v response=%s", gotHeader, refreshed, response)
+	}
+}
+
+func TestAuthRefreshRejectedTokenRequiresReauthentication(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"refresh_token_reused"}`))
+	}))
+	defer server.Close()
+
+	storage, err := json.Marshal(storageJSON{
+		AccessToken:      "old-token",
+		RefreshToken:     "reused-refresh",
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL + "/v1",
+		AccountID:        "reused-account",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(map[string]any{"StorageJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthRefresh(request)
+	var envelope struct {
+		Error struct {
+			Code       string `json:"code"`
+			HTTPStatus int    `json:"http_status"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "reauth_required" || envelope.Error.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("unexpected rejected-token response: %s", response)
 	}
 }
 

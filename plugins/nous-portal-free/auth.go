@@ -276,10 +276,10 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 		}))
 	}
 
-	// Inspect the OAuth error code to decide whether to keep polling.
+	// Device-code polling has a bounded state lifetime. Only the two OAuth
+	// continuation responses remain pending; every other error is terminal.
 	var oerr struct {
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description"`
+		Error string `json:"error"`
 	}
 	_ = json.Unmarshal(body, &oerr)
 	switch oerr.Error {
@@ -308,11 +308,30 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			"Message": "device authorization expired",
 		}))
 	default:
+		loginStates.delete(req.State)
 		return okEnvelopeJSON(mustJSON(map[string]any{
-			"Status":   "pending",
-			"Message":  oerr.ErrorDescription,
-			"Metadata": map[string]any{"interval": interval},
+			"Status":  "error",
+			"Message": "device authorization failed",
 		}))
+	}
+}
+
+func oauthErrorCode(body []byte) string {
+	var response struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(response.Error))
+}
+
+func refreshError(body []byte, status int) []byte {
+	switch oauthErrorCode(body) {
+	case "invalid_grant", "invalid_token", "refresh_token_reused", "revoked", "expired_token":
+		return errorEnvelopeWithStatus("reauth_required", "Nous refresh token is no longer valid; reconnect the account", status)
+	default:
+		return errorEnvelopeWithStatus("refresh_failed", "refresh returned "+strconv.Itoa(status), status)
 	}
 }
 
@@ -348,17 +367,18 @@ func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 		clientID = defaultClientID
 	}
 
-	status, body, err := httpPostForm(portal, "/api/oauth/token",
+	status, body, err := httpPostFormWithHeaders(portal, "/api/oauth/token",
 		map[string]string{
-			"grant_type":    "refresh_token",
-			"client_id":     clientID,
-			"refresh_token": store.RefreshToken,
-		}, defaultRequestTimeout)
+			"grant_type": "refresh_token",
+			"client_id":  clientID,
+		},
+		map[string]string{"x-nous-refresh-token": store.RefreshToken},
+		defaultRequestTimeout)
 	if err != nil {
 		return errorEnvelope("refresh_failed", "refresh request failed: "+err.Error()), nil
 	}
 	if status != 200 {
-		return errorEnvelopeWithStatus("refresh_failed", "refresh returned "+strconv.Itoa(status), status), nil
+		return refreshError(body, status), nil
 	}
 	var tok tokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
