@@ -474,7 +474,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          gh release download "${{ needs.prepare-release.outputs.tag }}" --pattern "${{ needs.prepare-release.outputs.plugin }}_*.zip" --clobber
+          gh release download "${{ needs.prepare-release.outputs.tag }}" --pattern "${{ needs.prepare-release.outputs.plugin }}_*.zip" --dir "$GITHUB_WORKSPACE/dist" --clobber
       - name: Generate registry.json
         shell: bash
         run: |
