@@ -522,5 +522,4 @@ jobs:
             echo "registry.json is already current"
             exit 0
           fi
-          git commit -m "chore: update ${PLUGIN} registry to ${RELEASE_VERSION}"
-          git push origin main
+          git push origin HEAD:refs/heads/main
