@@ -480,6 +480,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/generate_registry.py \
+            --plugin "$PLUGIN" \
             --tag "${{ needs.prepare-release.outputs.tag }}" \
             --version "${{ needs.prepare-release.outputs.version }}" \
             --dist "$GITHUB_WORKSPACE/dist" \
