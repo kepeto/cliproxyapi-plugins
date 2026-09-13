@@ -432,7 +432,7 @@ jobs:
             fi
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" "${BINARY_NAME}${ext}"
-      - uses: actions/upload-artifact@v4
+          fi
         if: matrix.plugin == needs.prepare-release.outputs.plugin
         with:
           name: ${{ matrix.plugin }}-${{ matrix.target }}
