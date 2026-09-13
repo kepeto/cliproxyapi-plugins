@@ -138,6 +138,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var totalBytes int
+	var sawEvent, sawDone bool
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
@@ -155,6 +156,17 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 			modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
+		switch {
+		case line == "[DONE]":
+			sawDone = true
+		default:
+			var event map[string]any
+			if json.Unmarshal([]byte(line), &event) == nil {
+				if _, ok := event["choices"]; ok {
+					sawEvent = true
+				}
+			}
+		}
 		chunks = append(chunks, map[string]any{"Payload": base64encode([]byte(line + "\n"))})
 	}
 	if err := scanner.Err(); err != nil {
@@ -166,6 +178,10 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	if len(chunks) == 0 {
 		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
+	}
+	if !sawEvent || !sawDone {
+		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+		return errorEnvelope("executor_stream_failed", "incomplete chat stream: missing completion event or [DONE]"), nil
 	}
 	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{
@@ -269,18 +285,18 @@ func executeOpenCodeChat(payload []byte, stream bool) (int, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-
-	// Set OpenCode headers
-	headers := opencodeHeaders()
-	for k, v := range headers {
+	for k, v := range opencodeHeaders() {
 		req.Header.Set(k, v)
+	}
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
 	}
 	req.Header.Set("Authorization", "Bearer public")
 	req.Header.Set("Content-Type", "application/json")
 
 	client := httpClient
 	if stream {
-		client = &http.Client{Transport: streamTransport}
+		client = &http.Client{Transport: streamTransport, Timeout: HTTP_TIMEOUT}
 	}
 
 	resp, err := client.Do(req)

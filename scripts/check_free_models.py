@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check and observe free-provider model health through CLIProxyAPI.
+"""Check and observe model health for CPA provider plugins.
+
+By default all known providers are tested. ``--all`` auto-discovers every
+provider prefix visible in ``/v1/models`` without filtering. ``--provider``
+restricts the check to specific providers (repeat for multiple).
 
 The default mode performs one pass. ``--watch`` repeats passes, keeping models
 that disappeared from the visible catalog in its candidate set so recovery can
@@ -9,6 +13,8 @@ can look like a health transition.
 
 Examples:
   python3 scripts/check_free_models.py
+  python3 scripts/check_free_models.py --all
+  python3 scripts/check_free_models.py --provider nous-portal
   python3 scripts/check_free_models.py --provider opencode-free --delay 2
   python3 scripts/check_free_models.py --watch --interval 900
   python3 scripts/check_free_models.py --watch --iterations 2 --json
@@ -28,7 +34,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
-DEFAULT_PROVIDERS = ("opencode-free", "kilo-free", "nous-portal-free")
+KNOWN_PROVIDERS = ("opencode-free", "kilo-free", "nous-portal-free", "nous-portal")
+DEFAULT_PROVIDERS = KNOWN_PROVIDERS
 MESSAGE_LIMIT = 4096
 
 
@@ -69,8 +76,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--provider",
         action="append",
-        choices=DEFAULT_PROVIDERS,
-        help="Only test this provider; repeat for multiple providers",
+        help="Only test this provider; repeat for multiple providers. "
+        "Any prefix visible in /v1/models is accepted; known: "
+        + ", ".join(KNOWN_PROVIDERS),
     )
     parser.add_argument("--model", action="append", help="Only test this exact model ID")
     parser.add_argument(
@@ -93,6 +101,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     parser.add_argument("--quiet", action="store_true", help="Only print failures and final summary")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Auto-discover and test all providers visible in /v1/models",
+    )
     parser.add_argument("--watch", action="store_true", help="Repeat checks and show visible catalog changes")
     parser.add_argument(
         "--interval",
@@ -151,7 +164,17 @@ def error_result(
     return Result(model, provider, False, code, safe_message(message), status, category)
 
 
-def models_from_response(payload: Any, providers: set[str]) -> tuple[list[str], Result | None]:
+def models_from_response(payload: Any, providers: set[str] | None) -> tuple[list[str], Result | None]:
+    """Extract model IDs from a /v1/models response.
+
+    When *providers* is non-empty, only models whose prefix (the part before
+    the first ``/``) appears in *providers* are returned.  Prefixed models use
+    the segment before the first ``/``; unprefixed models (no ``/``) use the
+    ``owned_by`` field instead.
+
+    When *providers* is ``None`` or empty every model in the response is
+    returned (auto-discover mode).
+    """
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return [], error_result("/v1/models", "cpa", "invalid_models_response", "response does not contain a data array")
     models: list[str] = []
@@ -159,11 +182,16 @@ def models_from_response(payload: Any, providers: set[str]) -> tuple[list[str], 
         if not isinstance(entry, dict):
             continue
         model_id = entry.get("id")
-        if not isinstance(model_id, str):
+        if not isinstance(model_id, str) or not model_id:
             continue
-        provider = model_id.split("/", 1)[0]
-        if provider in providers:
-            models.append(model_id)
+        if providers:
+            if "/" in model_id:
+                prefix = model_id.split("/", 1)[0]
+            else:
+                prefix = str(entry.get("owned_by", ""))
+            if prefix not in providers:
+                continue
+        models.append(model_id)
     return sorted(set(models)), None
 
 
@@ -244,7 +272,7 @@ def check_model(base_url: str, api_key: str, model: str, message: str, max_token
 
 
 def fetch_visible_models(
-    base_url: str, api_key: str, timeout: float, providers: set[str]
+    base_url: str, api_key: str, timeout: float, providers: set[str] | None
 ) -> tuple[list[str], Result | None, int | None]:
     try:
         status, payload = request_json(f"{base_url}/models", api_key, timeout)
@@ -286,7 +314,7 @@ def catalog_diff(before: list[str], after: list[str], known: set[str]) -> dict[s
 def run_watch_pass(
     args: argparse.Namespace,
     base_url: str,
-    providers: set[str],
+    providers: set[str] | None,
     known: set[str],
 ) -> tuple[dict[str, Any], set[str]]:
     before, listing_error, _ = fetch_visible_models(base_url, args.api_key, args.timeout, providers)
@@ -347,7 +375,7 @@ def emit_watch(report: dict[str, Any], as_json: bool, pass_number: int) -> None:
     print(json.dumps({"ok": report["failures"] == 0, "models": len(report["checks"]), "failures": report["failures"]}))
 
 
-def run_once(args: argparse.Namespace, base_url: str, providers: set[str]) -> int:
+def run_once(args: argparse.Namespace, base_url: str, providers: set[str] | None) -> int:
 	visible_before, listing_error, _ = fetch_visible_models(base_url, args.api_key, args.timeout, providers)
 	if listing_error is not None:
 		emit(listing_error, args.json, False)
@@ -358,7 +386,7 @@ def run_once(args: argparse.Namespace, base_url: str, providers: set[str]) -> in
 		models = [model for model in models if model in wanted]
 
 	if not models:
-		print(json.dumps({"ok": False, "code": "no_free_models", "message": "no matching free models found"}))
+		print(json.dumps({"ok": False, "code": "no_models", "message": "no matching models found"}))
 		return 1
 
 	if not args.json:
@@ -410,7 +438,12 @@ def main() -> int:
         return 2
 
     base_url = normalize_base_url(args.base_url)
-    providers = set(args.provider or DEFAULT_PROVIDERS)
+    if getattr(args, "all", False):
+        providers: set[str] | None = None  # auto-discover
+    elif args.provider:
+        providers = set(args.provider)
+    else:
+        providers = set(DEFAULT_PROVIDERS)
     if not args.watch:
         return run_once(args, base_url, providers)
 

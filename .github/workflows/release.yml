@@ -3,14 +3,32 @@ name: release
 on:
   push:
     tags:
-      - 'v*'
+      - '*-v*'
   workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Plugin ID to release"
+        required: true
+        type: choice
+        options:
+          - nous-portal
+          - nous-portal-free
+          - opencode-free
+          - kilo-free
+      version:
+        description: "Semver without v, e.g. 0.1.34"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   prepare-release:
+    outputs:
+      plugin: ${{ steps.release-vars.outputs.plugin }}
+      version: ${{ steps.release-vars.outputs.version }}
+      tag: ${{ steps.release-vars.outputs.tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -18,13 +36,39 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Validate release tag
+        id: release-vars
         shell: bash
+        env:
+          INPUT_PLUGIN: ${{ inputs.plugin }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
-            echo "release workflow requires a semantic-version tag, got '$GITHUB_REF_NAME'" >&2
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            plugin="$INPUT_PLUGIN"
+            version="$INPUT_VERSION"
+            tag="${plugin}-v${version}"
+          else
+            tag="$GITHUB_REF_NAME"
+            if [[ ! "$tag" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)-v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+              echo "release tag must be <plugin>-v<semver>, got '$tag'" >&2
+              exit 1
+            fi
+            plugin="${tag%-v*}"
+            version="${tag#*-v}"
+          fi
+          if [[ ! "$plugin" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)$ ]]; then
+            echo "unknown plugin '$plugin'" >&2
             exit 1
           fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid semver '$version'" >&2
+            exit 1
+          fi
+          echo "plugin=$plugin" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "PLUGIN=$plugin" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Create release
         env:
@@ -93,6 +137,7 @@ jobs:
   build:
     name: build ${{ matrix.plugin }} ${{ matrix.target }}
     needs: prepare-release
+    if: matrix.plugin == needs.prepare-release.outputs.plugin
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -342,7 +387,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${{ needs.prepare-release.outputs.version }}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build plugin
@@ -388,7 +433,6 @@ jobs:
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" "${BINARY_NAME}${ext}"
           fi
-      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.plugin }}-${{ matrix.target }}
           path: |
@@ -407,17 +451,20 @@ jobs:
             printf 'expected archive assets, found %s\n' "${#assets[@]}" >&2
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.plugin }}-v${{ needs.prepare-release.outputs.version }}" "${assets[@]}" --clobber
 
   generate-registry:
     name: generate plugin store registry
-    needs: build
+    needs: [prepare-release, build]
+    env:
+      PLUGIN: ${{ needs.prepare-release.outputs.plugin }}
+      RELEASE_VERSION: ${{ needs.prepare-release.outputs.version }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Download all release assets
+      - name: Download selected release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -425,16 +472,16 @@ jobs:
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cd "$GITHUB_WORKSPACE/dist"
-          gh release download "$GITHUB_REF_NAME" --pattern '*.tar.gz' --pattern '*.zip' --clobber
-
+          gh release download "$GITHUB_REF_NAME" --pattern "${{ needs.prepare-release.outputs.plugin }}_*.zip" --clobber
       - name: Generate registry.json
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/generate_registry.py \
-            --tag "$GITHUB_REF_NAME" \
-            --version "${GITHUB_REF_NAME#v}" \
+            --tag "${{ needs.prepare-release.outputs.tag }}" \
+            --version "${{ needs.prepare-release.outputs.version }}" \
             --dist "$GITHUB_WORKSPACE/dist" \
+            --existing "$GITHUB_WORKSPACE/registry.json" \
             --output "$GITHUB_WORKSPACE/registry.json"
       - name: Generate checksums.txt
         shell: bash
@@ -472,5 +519,5 @@ jobs:
             echo "registry.json is already current"
             exit 0
           fi
-          git commit -m "chore: update plugin store registry to ${GITHUB_REF_NAME#v}"
+          git commit -m "chore: update ${PLUGIN} registry to ${RELEASE_VERSION}"
           git push origin main

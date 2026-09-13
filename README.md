@@ -43,16 +43,20 @@ Output: `<plugin>.so` in each plugin directory.
 
 ## Deploy
 
-Use the version-safe deployment target. It normalizes the embedded release
-version, installs versioned files directly into CPA's plugin directory, updates
-the configured store version, and verifies the installed artifacts.
+Use the version-safe deployment target for one plugin at a time. It normalizes
+the embedded release version, installs only the selected versioned file into
+CPA's plugin directory, updates that plugin's store version, and verifies the
+selected artifact.
 
 ```bash
-make deploy
+make deploy PLUGIN=opencode-free
 systemctl --user restart cli-proxy-api.service
 ```
 
-Do not hand-copy unversioned `.so` files or hot-swap/remove a loaded Go plugin.
+Release tags and assets are plugin-specific, for example
+`opencode-free-v0.1.34`. Do not hand-copy unversioned `.so` files or hot-swap
+or remove a loaded Go plugin.
+
 
 ## Configure
 

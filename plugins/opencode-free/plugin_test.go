@@ -225,7 +225,7 @@ func TestExecutorStreamForcesSSE(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		streamValue, _ = payload["stream"].(bool)
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"))
 	}))
 	defer server.Close()
 	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
@@ -239,6 +239,37 @@ func TestExecutorStreamForcesSSE(t *testing.T) {
 	if !strings.Contains(string(response), `"Chunks"`) || accept != "text/event-stream" || !streamValue {
 		t.Fatalf("stream request not normalized: response=%s accept=%q stream=%v", response, accept, streamValue)
 	}
+}
+
+func TestExecutorStreamRejectsIncompleteStream(t *testing.T) {
+	originalRefresher := opencodeRefresher
+	originalChatURL := currentOpenCodeChatURL()
+	defer func() {
+		opencodeRefresher = originalRefresher
+		endpointMu.Lock()
+		opencodeChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+	}))
+	defer server.Close()
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"truncated-free"}, nil
+	}, nil)
+	endpointMu.Lock()
+	opencodeChatURL = server.URL
+	endpointMu.Unlock()
+
+	response, _ := handleExecutorExecuteStream([]byte(`{"Model":"truncated-free","Messages":[]}`))
+	if !strings.Contains(string(response), "incomplete chat stream") {
+		t.Fatalf("truncated stream was not rejected: %s", response)
+	}
+	if !modelHealth.Hidden(openCodeHealthScope(), "truncated-free") {
+		t.Fatal("truncated stream did not mark the model unhealthy")
+	}
+	modelHealth.RecordProbeSuccess(openCodeHealthScope(), "truncated-free")
 }
 
 func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
@@ -337,4 +368,123 @@ func TestSmokeFailureHidesAndProbeRestoresModel(t *testing.T) {
 		t.Fatalf("recovered model remained hidden: %s", response)
 	}
 	modelHealth.RecordProbeSuccess(scope, model)
+}
+
+func TestFetchOpenCodeMetadataFallsBackToProviderNPM(t *testing.T) {
+	originalURL := openCodeMetadataURL
+	originalClient := httpClient
+	defer func() {
+		openCodeMetadataURL = originalURL
+		httpClient = originalClient
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "opencode": {"id":"opencode", "npm":"@ai-sdk/openai-compatible", "models":{
+    "chat-free":{"cost":{"input":0,"output":0}},
+    "vision-free":{"cost":{"input":0,"output":0},"provider":{"npm":"@ai-sdk/openai"}}
+  }}
+}`))
+	}))
+	defer server.Close()
+	openCodeMetadataURL = server.URL
+	httpClient = server.Client()
+
+	metadata, err := fetchOpenCodeMetadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metadata["chat-free"].Provider.NPM; got != "@ai-sdk/openai-compatible" {
+		t.Fatalf("provider npm fallback missing: %q", got)
+	}
+	if got := metadata["vision-free"].Provider.NPM; got != "@ai-sdk/openai" {
+		t.Fatalf("model-level npm was overwritten: %q", got)
+	}
+}
+
+func TestFetchOpenCodeModelsFiltersByMetadata(t *testing.T) {
+	originalMetadataURL := openCodeMetadataURL
+	originalClient := httpClient
+	originalModelsURL := currentOpenCodeModelsURL()
+	defer func() {
+		openCodeMetadataURL = originalMetadataURL
+		httpClient = originalClient
+		endpointMu.Lock()
+		opencodeModelsURL = originalModelsURL
+		endpointMu.Unlock()
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/metadata" {
+			_, _ = w.Write([]byte(`{"opencode":{"id":"opencode","npm":"@ai-sdk/openai-compatible","models":{
+  "chat-free":{"cost":{"input":0,"output":0}},
+  "responses-free":{"cost":{"input":0,"output":0},"provider":{"npm":"@ai-sdk/openai"}},
+  "paid-free":{"cost":{"input":1,"output":2}},
+  "retired-free":{"cost":{"input":0,"output":0},"status":"deprecated"}
+}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"chat-free"},{"id":"responses-free"},{"id":"paid-free"},{"id":"retired-free"},{"id":"unlisted-free"}]}`))
+	}))
+	defer server.Close()
+	openCodeMetadataURL = server.URL + "/metadata"
+	httpClient = server.Client()
+	endpointMu.Lock()
+	opencodeModelsURL = server.URL + "/v1/models"
+	endpointMu.Unlock()
+
+	ids, err := fetchOpenCodeModels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unlisted models have no official metadata and must be dropped rather than
+	// guessed as free.
+	if got := strings.Join(ids, ","); got != "chat-free" {
+		t.Fatalf("metadata-filtered catalog = %q", got)
+	}
+}
+
+func TestModelEntryUsesMetadataCapabilities(t *testing.T) {
+	originalCatalog := openCodeCatalog
+	defer func() {
+		openCodeCatalogMu.Lock()
+		openCodeCatalog = originalCatalog
+		openCodeCatalogMu.Unlock()
+	}()
+	metadata := openCodeModelMetadata{Name: "Bounded Model", Description: "desc", Reasoning: true, ToolCall: true}
+	metadata.Limit.Context = 1000000
+	metadata.Limit.Output = 128000
+	metadata.Modalities.Input = []string{"text", "image"}
+	openCodeCatalogMu.Lock()
+	openCodeCatalog = []openCodeCatalogModel{{
+		ID:       "bounded-free",
+		Created:  1700000000,
+		OwnedBy:  "opencode",
+		Metadata: metadata,
+	}}
+	openCodeCatalogMu.Unlock()
+
+	entry := modelEntry("bounded-free", "bounded-free")
+	if entry["ContextLength"] != 1000000 || entry["MaxCompletionTokens"] != 128000 {
+		t.Fatalf("metadata limits not applied: %v", entry)
+	}
+	if entry["DisplayName"] != "Bounded Model" || entry["Reasoning"] != true || entry["ToolCall"] != true {
+		t.Fatalf("metadata capabilities not applied: %v", entry)
+	}
+	if got, ok := entry["SupportedInputModalities"].([]string); !ok || len(got) != 2 {
+		t.Fatalf("metadata modalities not applied: %v", entry["SupportedInputModalities"])
+	}
+	if entry["Created"] != int64(1700000000) || entry["OwnedBy"] != "opencode" {
+		t.Fatalf("live fields not applied: %v", entry)
+	}
+
+	// An alias inherits its target metadata; an unknown ID keeps identity only.
+	alias := modelEntry("deep-free", "bounded-free")
+	if alias["ContextLength"] != 1000000 {
+		t.Fatalf("alias did not inherit target metadata: %v", alias)
+	}
+	unknown := modelEntry("unknown-free", "unknown-free")
+	if _, ok := unknown["ContextLength"]; ok {
+		t.Fatalf("unknown model reported a context length: %v", unknown)
+	}
 }

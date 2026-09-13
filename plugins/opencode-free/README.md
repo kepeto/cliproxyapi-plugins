@@ -23,6 +23,34 @@ has no static fallback: an unavailable empty catalog returns a model-refresh
 error. Models that repeatedly fail model-specific inference are temporarily
 quarantined and automatically retried after the cooldown.
 
+### Free/chat classification
+
+Upstream `/v1/models` returns the full Zen catalog, including paid models. Each
+refresh also fetches the public model metadata document
+(`https://models.opencode.ai/api.json`) and classifies every live model by its
+`opencode` provider entry:
+
+- free: `cost.input == 0` and `cost.output == 0`
+- chat-compatible: provider npm is `@ai-sdk/openai-compatible`
+- not retired: `status != "deprecated"`
+
+The metadata document is authoritative: a live model absent from it is not
+published, and a metadata fetch failure fails the refresh rather than guessing
+from the model name. This prevents stale or paid models from entering the free
+catalog and lets a later refresh recover automatically.
+
+The metadata document lists the same bare model ID under many unrelated
+gateways whose prices and formats differ from Zen. Only the `opencode` provider
+entry is consulted, otherwise a paid Zen model such as `deepseek-v4-flash` would
+be exposed as free because another gateway prices it at zero.
+
+Catalog entries report live `created`/`owned_by` values from `/v1/models`, the
+official `limit.context` and `limit.output`, display names and descriptions, and
+input/output modalities and capability flags from the metadata document. For
+example, `mimo-v2.5-free` advertises text, image, audio, and video input rather
+than a plugin-defined text-only default. Aliases inherit the target model's
+metadata.
+
 ## Build
 
 ```bash
@@ -72,7 +100,12 @@ Health probes run every 15 minutes for models in the live catalog. A failed
 probe or limit/server/timeout/invalid response hides that model immediately; a
 successful later probe restores it. Normal model-specific 4xx failures use the
 three-failure threshold. SSE is buffered with 100,000-chunk, 100 MiB total, and
-1 MiB line limits.
+1 MiB line limit.
+
+A buffered stream is only forwarded when it contains both a JSON event carrying
+`choices` and a `[DONE]` terminator. A stream that ends early is rejected with
+`executor_stream_failed` and marks the model unhealthy, so a silently truncated
+upstream stream is not presented to the client as a complete response.
 
 ## Files
 

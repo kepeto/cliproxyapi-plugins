@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +23,118 @@ const (
 	HTTP_TIMEOUT = 30 * time.Second
 )
 
+var openCodeMetadataURL = "https://models.opencode.ai/api.json"
+
+type openCodeModelMetadata struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Cost        struct {
+		Input  float64 `json:"input"`
+		Output float64 `json:"output"`
+	} `json:"cost"`
+	Limit struct {
+		Context int `json:"context"`
+		Input   int `json:"input"`
+		Output  int `json:"output"`
+	} `json:"limit"`
+	Modalities struct {
+		Input  []string `json:"input"`
+		Output []string `json:"output"`
+	} `json:"modalities"`
+	Reasoning        bool   `json:"reasoning"`
+	ToolCall         bool   `json:"tool_call"`
+	Attachment       bool   `json:"attachment"`
+	StructuredOutput bool   `json:"structured_output"`
+	Temperature      bool   `json:"temperature"`
+	Status           string `json:"status"`
+	Provider         struct {
+		NPM string `json:"npm"`
+	} `json:"provider"`
+	ProviderID string `json:"-"`
+}
+
+// openCodeLiveModel is one entry of the upstream /v1/models response.
+type openCodeLiveModel struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+}
+
+// openCodeCatalogModel is a published model: the live catalog entry merged
+// with the official metadata for the same ID. Every field CPA receives is
+// derived from one of these two live sources; nothing is hardcoded per model.
+type openCodeCatalogModel struct {
+	ID       string
+	Created  int64
+	OwnedBy  string
+	Metadata openCodeModelMetadata
+}
+
+type openCodeProviderMetadata struct {
+	ID     string                           `json:"id"`
+	NPM    string                           `json:"npm"`
+	Models map[string]openCodeModelMetadata `json:"models"`
+}
+
+var openCodeCatalogMu sync.RWMutex
+var openCodeCatalog []openCodeCatalogModel
+
+// openCodeCatalogModelFor returns the joined catalog entry for an upstream ID.
+// Aliases are resolved by the caller before lookup.
+func openCodeCatalogModelFor(id string) (openCodeCatalogModel, bool) {
+	openCodeCatalogMu.RLock()
+	defer openCodeCatalogMu.RUnlock()
+	for _, model := range openCodeCatalog {
+		if model.ID == id {
+			return model, true
+		}
+	}
+	return openCodeCatalogModel{}, false
+}
+
+func fetchOpenCodeMetadata() (map[string]openCodeModelMetadata, error) {
+	req, err := http.NewRequest(http.MethodGet, openCodeMetadataURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "opencode/latest/1.14.50/cli")
+	status, body, err := httpDo(req)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("opencode metadata returned %d", status)
+	}
+	var providers map[string]openCodeProviderMetadata
+	if err := json.Unmarshal(body, &providers); err != nil {
+		return nil, err
+	}
+	// The same bare model ID is listed by many unrelated gateways in this
+	// catalog, and their cost/format differ from Zen. This plugin only proxies
+	// Zen, so only the `opencode` provider entry may classify a live model.
+	// Other providers would otherwise mark paid Zen models as free.
+	result := make(map[string]openCodeModelMetadata)
+	for providerKey, provider := range providers {
+		providerID := provider.ID
+		if providerID == "" {
+			providerID = providerKey
+		}
+		if providerID != "opencode" {
+			continue
+		}
+		for modelKey, metadata := range provider.Models {
+			if metadata.Provider.NPM == "" {
+				metadata.Provider.NPM = provider.NPM
+			}
+			metadata.ProviderID = providerID
+			result[modelKey] = metadata
+		}
+	}
+	return result, nil
+}
+
 // OpenCode headers (from pi-bansos)
 func opencodeHeaders() map[string]string {
 	return map[string]string{
@@ -37,13 +148,8 @@ func opencodeHeaders() map[string]string {
 	}
 }
 
-func randomSessionID() string {
-	return "cli-" + shared.RandomHex(16)
-}
-
-func randomRequestID() string {
-	return shared.RandomHex(32)
-}
+func randomSessionID() string { return "cli-" + shared.RandomHex(16) }
+func randomRequestID() string { return shared.RandomHex(32) }
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
 
@@ -71,7 +177,15 @@ func init() {
 }
 
 // fetchOpenCodeModels retrieves the current free model list from OpenCode.
+// The published catalog is the intersection of the live /v1/models response
+// and the official model metadata: metadata supplies cost, limits, modalities
+// and capabilities, while the live response supplies created/owned_by and the
+// authoritative availability list. Nothing is hardcoded per model.
 func fetchOpenCodeModels() ([]string, error) {
+	metadata, err := fetchOpenCodeMetadata()
+	if err != nil {
+		return nil, fmt.Errorf("opencode metadata unavailable: %w", err)
+	}
 	req, err := http.NewRequest(http.MethodGet, currentOpenCodeModelsURL(), nil)
 	if err != nil {
 		return nil, err
@@ -84,29 +198,54 @@ func fetchOpenCodeModels() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if statusCode != 200 {
+	if statusCode != http.StatusOK {
 		return nil, fmt.Errorf("opencode models returned %d", statusCode)
 	}
-
 	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+		Data []openCodeLiveModel `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
+
 	ids := make([]string, 0, len(payload.Data))
-	for _, m := range payload.Data {
-		if m.ID == "" {
+	catalog := make([]openCodeCatalogModel, 0, len(payload.Data))
+	seen := make(map[string]struct{}, len(payload.Data))
+	for _, live := range payload.Data {
+		if live.ID == "" {
 			continue
 		}
-		// Only expose free-tier models; paid models require API key.
-		lower := strings.ToLower(m.ID)
-		if strings.Contains(lower, "-free") || strings.Contains(lower, ":free") {
-			ids = append(ids, m.ID)
+		if _, duplicate := seen[live.ID]; duplicate {
+			continue
 		}
+		seen[live.ID] = struct{}{}
+		model, found := metadata[live.ID]
+		if !found {
+			// Without official metadata a model cannot be classified as a
+			// free, OpenAI-compatible chat model. Skip it rather than guess.
+			continue
+		}
+		if model.Cost.Input != 0 || model.Cost.Output != 0 {
+			continue
+		}
+		if model.Provider.NPM != "@ai-sdk/openai-compatible" {
+			continue
+		}
+		if model.Status == "deprecated" {
+			continue
+		}
+		ids = append(ids, live.ID)
+		catalog = append(catalog, openCodeCatalogModel{
+			ID:       live.ID,
+			Created:  live.Created,
+			OwnedBy:  live.OwnedBy,
+			Metadata: model,
+		})
 	}
+
+	openCodeCatalogMu.Lock()
+	openCodeCatalog = catalog
+	openCodeCatalogMu.Unlock()
 	return ids, nil
 }
 
@@ -157,10 +296,10 @@ func probeOpenCodeModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome
 		return shared.ProbeFailed
 	}
 	status, body, err := executeOpenCodeChat(payload, false)
-	if status == 401 || status == 403 {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return shared.ProbeIgnored
 	}
-	if err != nil || status != 200 || !shared.ValidChatResponse(body) {
+	if err != nil || status != http.StatusOK || !shared.ValidChatResponse(body) {
 		return shared.ProbeFailed
 	}
 	return shared.ProbeSucceeded

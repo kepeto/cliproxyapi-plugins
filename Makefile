@@ -21,8 +21,8 @@ help:
 	@echo "  make arch-linux-arm64"
 	@echo "  make arch-linux-arm"
 	@echo "  Cross-arch c-shared builds require CC_ARM64/CC_ARM (default: aarch64-linux-gnu-gcc / arm-linux-gnueabihf-gcc)"
-	@echo "  make deploy         Build + install to CPA plugin dir (VERSION from git)"
-	@echo "  make verify-deploy  Check embedded version == filename for installed plugins"
+	@echo "  make deploy PLUGIN=opencode-free  Build + install one plugin"
+	@echo "  make verify-deploy PLUGIN=opencode-free  Check one installed plugin"
 
 build: $(if $(PLUGIN),$(PLUGIN),$(PLUGINS))
 
@@ -75,28 +75,31 @@ CC_ARM ?= arm-linux-gnueabihf-gcc
 # copies under the matching name, then verifies embedded == filename. Never
 # hand-copy .so files — a renamed file is how version mismatch happens.
 deploy:
+	@if [ -z "$(PLUGIN)" ]; then echo "deploy requires PLUGIN=<plugin>" >&2; exit 1; fi
+	@if ! printf '%s\n' "$(PLUGINS)" | tr ' ' '\n' | grep -qx "$(PLUGIN)"; then echo "unknown PLUGIN=$(PLUGIN)" >&2; exit 1; fi
 	@case "$(DEPLOY_VERSION_NORMALIZED)" in \
 		""|dev|*-dirty) echo "refusing deploy with invalid version '$(DEPLOY_VERSION_NORMALIZED)'" >&2; exit 1;; \
 	esac
 	@mkdir -p "$(PLUGIN_DIR)"
-	@$(MAKE) --no-print-directory VERSION=$(DEPLOY_VERSION_NORMALIZED) build
-	@for plugin in $(PLUGINS); do \
-		cp plugins/$$plugin/$$plugin.so $(PLUGIN_DIR)/$$plugin-v$(DEPLOY_VERSION_NORMALIZED).so || exit 1; \
-		find $(PLUGIN_DIR) -name "$$plugin-v*.so" ! -name "$$plugin-v$(DEPLOY_VERSION_NORMALIZED).so" -delete; \
-	done
-	@python3 scripts/sync_store_versions.py $(CPA_CONFIG) $(DEPLOY_VERSION_NORMALIZED) $(PLUGINS)
-	@$(MAKE) --no-print-directory DEPLOY_VERSION=$(DEPLOY_VERSION_NORMALIZED) verify-deploy
+	@$(MAKE) --no-print-directory VERSION=$(DEPLOY_VERSION_NORMALIZED) PLUGIN=$(PLUGIN) build
+	@cp plugins/$(PLUGIN)/$(PLUGIN).so "$(PLUGIN_DIR)/$(PLUGIN)-v$(DEPLOY_VERSION_NORMALIZED).so"
+	@find "$(PLUGIN_DIR)" -name "$(PLUGIN)-v*.so" ! -name "$(PLUGIN)-v$(DEPLOY_VERSION_NORMALIZED).so" -delete
+	@python3 scripts/sync_store_versions.py "$(CPA_CONFIG)" "$(DEPLOY_VERSION_NORMALIZED)" "$(PLUGIN)"
+	@$(MAKE) --no-print-directory DEPLOY_VERSION=$(DEPLOY_VERSION_NORMALIZED) PLUGIN=$(PLUGIN) verify-deploy
 # Fails loudly if any installed .so does not embed its own filename version.
 verify-deploy:
+	@if [ -z "$(PLUGIN)" ]; then echo "verify-deploy requires PLUGIN=<plugin>" >&2; exit 1; fi
+	@if ! printf '%s\n' "$(PLUGINS)" | tr ' ' '\n' | grep -qx "$(PLUGIN)"; then echo "unknown PLUGIN=$(PLUGIN)" >&2; exit 1; fi
 	@fail=0; \
-	for f in $(PLUGIN_DIR)/*.so; do \
-		expected=$$([ -f "$$f" ] && basename $$f | sed -E 's/.*-v?([0-9][0-9.]*)\.so/\1/'); \
+	for f in "$(PLUGIN_DIR)/$(PLUGIN)-v"*.so; do \
+		[ -e "$$f" ] || continue; \
+		expected=$$([ -f "$$f" ] && basename "$$f" | sed -E 's/.*-v?([0-9][0-9.]*)\.so/\1/'); \
 		embedded=$$(strings "$$f" | grep -m1 -E "^$$expected$$"); \
 		if [ "$$embedded" != "$$expected" ]; then \
-			echo "MISMATCH: $$(basename $$f) embeds '$${embedded:-nothing}'"; fail=1; \
+			echo "MISMATCH: $$(basename "$$f") embeds '$${embedded:-nothing}'"; fail=1; \
 		fi; \
 	done; \
-	if [ $$fail -eq 0 ]; then echo "all installed plugins embed their filename version"; fi; \
+	if [ $$fail -eq 0 ]; then echo "$(PLUGIN) installed plugin versions verified"; fi; \
 	exit $$fail
 
 
