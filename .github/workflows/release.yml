@@ -433,6 +433,7 @@ jobs:
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" "${BINARY_NAME}${ext}"
           fi
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.plugin }}-${{ matrix.target }}
           path: |
@@ -471,8 +472,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cd "$GITHUB_WORKSPACE/dist"
-          gh release download "$GITHUB_REF_NAME" --pattern "${{ needs.prepare-release.outputs.plugin }}_*.zip" --clobber
+          gh release download "${{ needs.prepare-release.outputs.tag }}" --pattern "${{ needs.prepare-release.outputs.plugin }}_*.zip" --clobber
       - name: Generate registry.json
         shell: bash
         run: |
@@ -494,13 +494,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
       - name: Upload registry to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release upload "$GITHUB_REF_NAME" "$GITHUB_WORKSPACE/registry.json" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" "$GITHUB_WORKSPACE/registry.json" --clobber
       - name: Commit registry to main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
