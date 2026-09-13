@@ -137,7 +137,6 @@ jobs:
   build:
     name: build ${{ matrix.plugin }} ${{ matrix.target }}
     needs: prepare-release
-    if: matrix.plugin == needs.prepare-release.outputs.plugin
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -391,6 +390,7 @@ jobs:
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build plugin
+        if: matrix.plugin == needs.prepare-release.outputs.plugin
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -432,8 +432,8 @@ jobs:
             fi
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" "${BINARY_NAME}${ext}"
-          fi
       - uses: actions/upload-artifact@v4
+        if: matrix.plugin == needs.prepare-release.outputs.plugin
         with:
           name: ${{ matrix.plugin }}-${{ matrix.target }}
           path: |
@@ -441,6 +441,7 @@ jobs:
             dist/*.zip
           if-no-files-found: error
       - name: Upload release assets
+        if: matrix.plugin == needs.prepare-release.outputs.plugin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
