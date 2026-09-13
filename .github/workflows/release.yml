@@ -96,24 +96,24 @@ jobs:
 
           git fetch --force --tags
           previous_tag=""
-          if previous_tag_value="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null)"; then
+          if previous_tag_value="$(git describe --tags --abbrev=0 "${{ steps.release-vars.outputs.tag }}^" 2>/dev/null)"; then
             previous_tag="$previous_tag_value"
-            changelog_range="${previous_tag}..${GITHUB_REF_NAME}"
+            changelog_range="${previous_tag}..${{ steps.release-vars.outputs.tag }}"
           else
-            changelog_range="$GITHUB_REF_NAME"
+            changelog_range="${{ steps.release-vars.outputs.tag }}"
           fi
 
           git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" |
             grep -Ev '^- (docs:|test:)' > "$changelog_entries_file" || true
 
           gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$GITHUB_REF_NAME" \
+            -f tag_name="${{ steps.release-vars.outputs.tag }}" \
             --jq .body > "$generated_notes_file" || true
           if [[ ! -s "$generated_notes_file" ]]; then
             if [[ -n "$previous_tag" ]]; then
-              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$previous_tag" "$GITHUB_REF_NAME" > "$generated_notes_file"
+              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$previous_tag" "${{ steps.release-vars.outputs.tag }}" > "$generated_notes_file"
             else
-              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > "$generated_notes_file"
+              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GITHUB_REPOSITORY" "${{ steps.release-vars.outputs.tag }}" > "$generated_notes_file"
             fi
           fi
 
@@ -128,10 +128,10 @@ jobs:
             cat "$generated_notes_file"
           } > "$updated_notes_file"
 
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file"
+          if gh release view "${{ steps.release-vars.outputs.tag }}" >/dev/null 2>&1; then
+            gh release edit "${{ steps.release-vars.outputs.tag }}" --title "${{ steps.release-vars.outputs.tag }}" --notes-file "$updated_notes_file"
           else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file" --draft=false
+            gh release create "${{ steps.release-vars.outputs.tag }}" --title "${{ steps.release-vars.outputs.tag }}" --notes-file "$updated_notes_file" --draft=false
           fi
 
   build:
@@ -454,7 +454,7 @@ jobs:
             printf 'expected archive assets, found %s\n' "${#assets[@]}" >&2
             exit 1
           fi
-          gh release upload "${{ needs.prepare-release.outputs.plugin }}-v${{ needs.prepare-release.outputs.version }}" "${assets[@]}" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.tag }}" "${assets[@]}" --clobber
 
   generate-registry:
     name: generate plugin store registry
