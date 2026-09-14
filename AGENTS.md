@@ -63,7 +63,10 @@ go test -race ./...
 - CPA loads `.so` files directly from `~/.cli-proxy-api/plugins` (or the configured `PLUGIN_DIR`) and does not recurse into architecture subdirectories.
 - Do not hand-rename or hand-copy versioned shared objects. Use the repository deployment flow and verify the embedded version with `make verify-deploy`.
 - Do not hot-swap or remove a loaded Go plugin while CLIProxyAPI is running. Restart the host service after deployment; see `docs/postmortem-plugin-hotswap-segv.md`.
-- Treat release artifacts, registry metadata, checksums, and version strings as one consistency boundary. If supported platforms change, update the release workflow, registry generation, README, and tests together.
+- Treat release artifacts, registry metadata, and version strings as one consistency boundary. For CPA compatibility, release tags MUST use `v<semver>` (for example `v0.1.35`), never plugin-specific tags such as `opencode-free-v0.1.35`. Plugin identity belongs in the registry ID, runtime registration, and asset filename prefix.
+- A plugin update is complete only when its canonical `v<semver>` GitHub release, all supported platform assets, and the corresponding plugin entry in `registry.json` on `main` are updated. Registry artifact URLs, SHA-256 digests, and sizes MUST match the actual release assets.
+- Pushes are separate release stages: source/workflow commit to `main`, release build/assets, and registry commit to `main`. Verify each stage independently. Registry automation MUST push explicitly with `git push origin HEAD:refs/heads/main` because `main` may be an ambiguous ref.
+- Before changing supported platforms, update the release workflow, registry generation, README, and tests together.
 - Do not put credentials, access tokens, private URLs, or local machine paths into committed source, tests, logs, or documentation.
 - Review release-workflow changes carefully: release automation publishes binaries and updates `registry.json`.
 

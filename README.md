@@ -53,9 +53,11 @@ make deploy PLUGIN=opencode-free
 systemctl --user restart cli-proxy-api.service
 ```
 
-Release tags and assets are plugin-specific, for example
-`opencode-free-v0.1.34`. Do not hand-copy unversioned `.so` files or hot-swap
-or remove a loaded Go plugin.
+Release workflow inputs identify the plugin separately, while GitHub release tags
+use CPA-compatible `v<semver>` names such as `v0.1.35`. Asset filenames remain
+plugin-specific, for example `opencode-free_0.1.35_linux_amd64.zip`. The update
+is complete only after the matching plugin entry in `registry.json` on `main` is
+updated with the canonical release URLs, checksums, and sizes.
 
 
 ## Configure
