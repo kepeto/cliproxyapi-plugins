@@ -517,14 +517,16 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp "$GITHUB_WORKSPACE/registry.json" "$RUNNER_TEMP/registry.json"
           git fetch origin main
           git checkout -B release-registry-main refs/remotes/origin/main
           git pull --ff-only origin main
-          mv /tmp/registry.json "$GITHUB_WORKSPACE/registry.json"
+          mv "$RUNNER_TEMP/registry.json" "$GITHUB_WORKSPACE/registry.json"
 
           git add registry.json
           if git diff --cached --quiet -- registry.json; then
             echo "registry.json is already current"
             exit 0
           fi
+          git commit -m "chore: update plugin registry"
           git push origin HEAD:refs/heads/main
