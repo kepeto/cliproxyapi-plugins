@@ -517,8 +517,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          mv "$GITHUB_WORKSPACE/registry.json" /tmp/registry.json
-          git checkout main
+          git fetch origin main
+          git checkout -B release-registry-main refs/remotes/origin/main
           git pull --ff-only origin main
           mv /tmp/registry.json "$GITHUB_WORKSPACE/registry.json"
 
