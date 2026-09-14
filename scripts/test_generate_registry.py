@@ -23,7 +23,7 @@ class RegistryGeneratorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.make_archives(root, "1.2.3", ("opencode-free",))
-            registry = generate_registry("1.2.3", "opencode-free-v1.2.3", root, ("opencode-free",))
+            registry = generate_registry("1.2.3", "v1.2.3", root, ("opencode-free",))
         self.assertEqual([plugin["id"] for plugin in registry["plugins"]], ["opencode-free"])
         self.assertEqual(len(registry["plugins"][0]["install"]["artifacts"]), 6)
         self.assertTrue(all(len(artifact["sha256"]) == 64 for artifact in registry["plugins"][0]["install"]["artifacts"]))
@@ -45,7 +45,7 @@ class RegistryGeneratorTest(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            registry = generate_registry("1.2.4", "opencode-free-v1.2.4", root, ("opencode-free",), existing)
+            registry = generate_registry("1.2.4", "v1.2.4", root, ("opencode-free",), existing)
         versions = {plugin["id"]: plugin["version"] for plugin in registry["plugins"]}
         self.assertEqual(versions["opencode-free"], "1.2.4")
         self.assertEqual(versions["nous-portal"], "1.2.3")
@@ -53,9 +53,9 @@ class RegistryGeneratorTest(unittest.TestCase):
     def test_invalid_tag_version_pair_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaises(ValueError):
-                generate_registry("1.2.3", "v1.2.3", Path(temp))
+                generate_registry("1.2.3", "opencode-free-v1.2.3", Path(temp))
             with self.assertRaises(ValueError):
-                generate_registry("dev", "opencode-free-vdev", Path(temp))
+                generate_registry("dev", "vdev", Path(temp))
 
 
 if __name__ == "__main__":

@@ -123,8 +123,8 @@ def generate_registry(
     plugin = selected_plugins[0]
     if plugin not in PLUGIN_METADATA:
         raise ValueError(f"unknown plugin: {plugin!r}")
-    if tag != f"{plugin}-v{version}":
-        raise ValueError(f"release tag {tag!r} must be {plugin}-v{version}")
+    if tag != f"v{version}":
+        raise ValueError(f"release tag {tag!r} must be v{version}")
 
     expected = {
         f"{plugin}_{version}_{goos}_{asset_arch}.zip"

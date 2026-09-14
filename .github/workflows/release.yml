@@ -46,15 +46,20 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             plugin="$INPUT_PLUGIN"
             version="$INPUT_VERSION"
-            tag="${plugin}-v${version}"
+            tag="v${version}"
           else
-            tag="$GITHUB_REF_NAME"
-            if [[ ! "$tag" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)-v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
-              echo "release tag must be <plugin>-v<semver>, got '$tag'" >&2
+            source_tag="$GITHUB_REF_NAME"
+            if [[ "$source_tag" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)-v([0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?)$ ]]; then
+              plugin="${BASH_REMATCH[1]}"
+              version="${BASH_REMATCH[2]}"
+              tag="v${version}"
+            elif [[ "$source_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?)$ ]]; then
+              echo "plugin-specific tag required for push-triggered releases: '$source_tag'" >&2
+              exit 1
+            else
+              echo "release tag must be v<semver> or <plugin>-v<semver>, got '$source_tag'" >&2
               exit 1
             fi
-            plugin="${tag%-v*}"
-            version="${tag#*-v}"
           fi
           if [[ ! "$plugin" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)$ ]]; then
             echo "unknown plugin '$plugin'" >&2
