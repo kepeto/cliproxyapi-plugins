@@ -24,11 +24,31 @@ const (
 	HTTP_TIMEOUT = 30 * time.Second
 )
 
-// kiloRefresher periodically fetches the live model catalog from KiloCode.
+// kiloCatalogModel is the live metadata returned by KiloCode's /models API.
+type kiloCatalogModel struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	Created      int64  `json:"created"`
+	IsFree       bool   `json:"isFree"`
+	Context      int    `json:"context_length"`
+	Expiration   string `json:"expiration_date"`
+	Architecture struct {
+		InputModalities  []string `json:"input_modalities"`
+		OutputModalities []string `json:"output_modalities"`
+	} `json:"architecture"`
+	TopProvider struct {
+		MaxCompletionTokens int `json:"max_completion_tokens"`
+	} `json:"top_provider"`
+}
+
 var (
 	endpointMu    sync.RWMutex
 	kiloChatURL   = defaultKiloChatURL
 	kiloModelsURL = defaultKiloModelsURL
+
+	kiloCatalogMu sync.RWMutex
+	kiloCatalog   = make(map[string]kiloCatalogModel)
 
 	kiloRefresher = shared.NewModelRefresher(
 		3*time.Hour,
@@ -132,25 +152,11 @@ func currentKiloModelsURL() string {
 	defer endpointMu.RUnlock()
 	return kiloModelsURL
 }
-
 func kiloHealthScope() string {
 	return PROVIDER_ID + "|" + currentKiloChatURL() + "|" + currentKiloModelsURL()
 }
 
-func httpDo(req *http.Request) (int, []byte, error) {
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, nil, err
-	}
-	return resp.StatusCode, raw, nil
-}
-
-// fetchKiloCatalog retrieves the current free model list from KiloCode.
+// fetchKiloCatalog retrieves the current free model list and metadata from KiloCode.
 func fetchKiloCatalog() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -161,43 +167,72 @@ func fetchKiloCatalog() ([]string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer kilo-free")
 	req.Header.Set("Accept", "application/json")
-
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("catalog returned %d", resp.StatusCode)
 	}
 
-	var result map[string]interface{}
+	var result struct {
+		Data []kiloCatalogModel `json:"data"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-
-	data, ok := result["data"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("no data in catalog")
-	}
-
-	ids := make([]string, 0)
-	for _, item := range data {
-		m, ok := item.(map[string]interface{})
-		if !ok {
+	now := time.Now()
+	ids := make([]string, 0, len(result.Data))
+	catalog := make(map[string]kiloCatalogModel, len(result.Data))
+	for _, model := range result.Data {
+		if model.ID == "" || !model.IsFree || kiloCatalogModelExpired(model, now) {
 			continue
 		}
-		id, ok := m["id"].(string)
-		if !ok || id == "" {
+		if _, duplicate := catalog[model.ID]; duplicate {
 			continue
 		}
-		isFree, _ := m["isFree"].(bool)
-		if isFree {
-			ids = append(ids, id)
-		}
+		catalog[model.ID] = model
+		ids = append(ids, model.ID)
 	}
+	kiloCatalogMu.Lock()
+	kiloCatalog = catalog
+	kiloCatalogMu.Unlock()
 	return ids, nil
+}
+
+func kiloCatalogModelExpired(model kiloCatalogModel, now time.Time) bool {
+	if model.Expiration == "" {
+		return false
+	}
+	expiresAt, err := time.Parse(time.RFC3339, model.Expiration)
+	if err != nil {
+		expiresAt, err = time.ParseInLocation("2006-01-02", model.Expiration, time.UTC)
+		if err != nil {
+			return false
+		}
+	}
+	return !expiresAt.After(now)
+}
+
+func kiloCatalogModelFor(id string) (kiloCatalogModel, bool) {
+	kiloCatalogMu.RLock()
+	defer kiloCatalogMu.RUnlock()
+	model, ok := kiloCatalog[id]
+	return model, ok
+}
+
+func httpDo(req *http.Request) (int, []byte, error) {
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, body, nil
 }
 
 // healthCheckKilo checks if KiloCode /models endpoint is alive

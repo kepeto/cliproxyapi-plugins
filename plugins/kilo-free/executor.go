@@ -51,7 +51,9 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 
 	baseModelID := resolveModel(modelID)
 	if baseModelID != "" && !kiloRefresher.Contains(baseModelID) {
-		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
+		if err := kiloRefresher.Refresh(); err != nil || !kiloRefresher.Contains(baseModelID) {
+			return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
+		}
 	}
 	if !modelHealth.Allow(kiloHealthScope(), baseModelID) {
 		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
@@ -99,7 +101,9 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	}
 	baseModelID := resolveModel(modelID)
 	if baseModelID != "" && !kiloRefresher.Contains(baseModelID) {
-		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
+		if err := kiloRefresher.Refresh(); err != nil || !kiloRefresher.Contains(baseModelID) {
+			return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
+		}
 	}
 	if !modelHealth.Allow(kiloHealthScope(), baseModelID) {
 		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil

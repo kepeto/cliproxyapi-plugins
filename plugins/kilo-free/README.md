@@ -18,11 +18,24 @@ are sent without Authorization, while catalog requests use `Bearer kilo-free`.
 
 ## Model Catalog
 
-Dynamic fetch from upstream with a 3-hour refresh. Models with repeated
-model-specific inference failures are temporarily quarantined and retried
-after a cooldown:
+The catalog is fetched from the live upstream `/models` endpoint and refreshed
+every 3 hours. A model miss during execution triggers an immediate catalog
+refresh, so newly published models do not require a plugin rebuild or a full
+refresh interval. The catalog keeps upstream display names, descriptions,
+context limits, completion limits, modalities, and expiration metadata when
+provided.
+
+Only entries with the upstream boolean `isFree: true` are exposed. The plugin
+does not maintain a hardcoded model allowlist; models added or removed by Kilo
+are reflected after a successful refresh.
+
+Entries with a parseable `expiration_date` at or before the refresh time are
+excluded from the active catalog. Unparseable expiration values are retained
+and exposed as metadata rather than guessed or silently treated as expired.
+
+Models with repeated model-specific inference failures are temporarily
+quarantined and retried after a cooldown:
 - `kilo-auto/free`
-- `kilo-code/free`
 - Additional models discovered via `/models`
 
 ## Build

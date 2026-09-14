@@ -38,21 +38,54 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	return result, nil
 }
 
-// modelEntry builds one catalog entry for a model ID (upstream or alias).
+// modelEntry builds one catalog entry from live upstream metadata. Aliases
+// inherit the metadata of their target through modelEntryFor.
 func modelEntry(id string) map[string]interface{} {
-	return map[string]interface{}{
-		"ID":                         prefixedModelID(id),
+	return modelEntryFor(id, id)
+}
+
+func modelEntryFor(publicID, lookupID string) map[string]interface{} {
+	entry := map[string]interface{}{
+		"ID":                         prefixedModelID(publicID),
 		"Object":                     "model",
-		"Created":                    0,
+		"Created":                    int64(0),
 		"OwnedBy":                    PROVIDER_ID,
 		"Type":                       PROVIDER_ID,
-		"Name":                       id,
-		"DisplayName":                id,
+		"Name":                       publicID,
+		"DisplayName":                publicID,
 		"SupportedGenerationMethods": []string{"chat"},
-		"SupportedInputModalities":   []string{"text"},
-		"SupportedOutputModalities":  []string{"text"},
 		"UserDefined":                false,
 	}
+	metadata, ok := kiloCatalogModelFor(lookupID)
+	if !ok {
+		return entry
+	}
+	if metadata.Created != 0 {
+		entry["Created"] = metadata.Created
+	}
+	if metadata.Name != "" {
+		entry["Name"] = metadata.Name
+		entry["DisplayName"] = metadata.Name
+	}
+	if metadata.Description != "" {
+		entry["Description"] = metadata.Description
+	}
+	if metadata.Context > 0 {
+		entry["ContextLength"] = metadata.Context
+	}
+	if metadata.TopProvider.MaxCompletionTokens > 0 {
+		entry["MaxCompletionTokens"] = metadata.TopProvider.MaxCompletionTokens
+	}
+	if len(metadata.Architecture.InputModalities) > 0 {
+		entry["SupportedInputModalities"] = metadata.Architecture.InputModalities
+	}
+	if len(metadata.Architecture.OutputModalities) > 0 {
+		entry["SupportedOutputModalities"] = metadata.Architecture.OutputModalities
+	}
+	if metadata.Expiration != "" {
+		entry["ExpirationDate"] = metadata.Expiration
+	}
+	return entry
 }
 
 func handleModelForAuth(rawReq []byte) ([]byte, error) {
@@ -77,7 +110,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 	}
 	for alias, target := range modelAliases.Entries() {
 		if !modelHealth.Hidden(kiloHealthScope(), target) {
-			models = append(models, modelEntry(alias))
+			models = append(models, modelEntryFor(alias, target))
 		}
 	}
 

@@ -341,3 +341,152 @@ func TestSmokeFailureHidesAndProbeRestoresModel(t *testing.T) {
 	}
 	modelHealth.RecordProbeSuccess(scope, model)
 }
+
+func TestModelEntryUsesLiveMetadata(t *testing.T) {
+	model := "metadata-free"
+	kiloCatalogMu.Lock()
+	previous := kiloCatalog
+	kiloCatalog = map[string]kiloCatalogModel{
+		model: {
+			ID:          model,
+			Name:        "Metadata Model",
+			Description: "live description",
+			Created:     123,
+			Context:     65536,
+			Expiration:  "2026-09-30",
+			Architecture: struct {
+				InputModalities  []string `json:"input_modalities"`
+				OutputModalities []string `json:"output_modalities"`
+			}{InputModalities: []string{"text", "image"}, OutputModalities: []string{"text"}},
+			TopProvider: struct {
+				MaxCompletionTokens int `json:"max_completion_tokens"`
+			}{MaxCompletionTokens: 8192},
+		},
+	}
+	kiloCatalogMu.Unlock()
+	defer func() {
+		kiloCatalogMu.Lock()
+		kiloCatalog = previous
+		kiloCatalogMu.Unlock()
+	}()
+
+	entry := modelEntry(model)
+	if entry["DisplayName"] != "Metadata Model" || entry["Description"] != "live description" {
+		t.Fatalf("live display metadata missing: %#v", entry)
+	}
+	if entry["ContextLength"] != 65536 || entry["MaxCompletionTokens"] != 8192 {
+		t.Fatalf("live limits missing: %#v", entry)
+	}
+	modalities, ok := entry["SupportedInputModalities"].([]string)
+	if !ok || len(modalities) != 2 || modalities[1] != "image" {
+		t.Fatalf("live input modalities missing: %#v", entry)
+	}
+}
+
+func TestExecutorRefreshesOnModelMiss(t *testing.T) {
+	originalRefresher := kiloRefresher
+	originalChatURL := currentKiloChatURL()
+	defer func() {
+		kiloRefresher = originalRefresher
+		endpointMu.Lock()
+		kiloChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+	model := "discovered-free"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{model}, nil
+	}, nil)
+	endpointMu.Lock()
+	kiloChatURL = server.URL
+	endpointMu.Unlock()
+
+	response, _ := handleExecutorExecute([]byte(`{"Model":"discovered-free","Messages":[{"role":"user","content":"hi"}]}`))
+	if !strings.Contains(string(response), `"Payload":"`) {
+		t.Fatalf("executor did not refresh on model miss: %s", response)
+	}
+}
+
+func TestFetchKiloCatalogFiltersFreeAndStoresMetadata(t *testing.T) {
+	originalURL := currentKiloModelsURL()
+	kiloCatalogMu.Lock()
+	originalCatalog := kiloCatalog
+	kiloCatalogMu.Unlock()
+	defer func() {
+		endpointMu.Lock()
+		kiloModelsURL = originalURL
+		endpointMu.Unlock()
+		kiloCatalogMu.Lock()
+		kiloCatalog = originalCatalog
+		kiloCatalogMu.Unlock()
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer kilo-free" {
+			t.Errorf("catalog authorization = %q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"paid/model","isFree":false},
+			{"id":"free/model","name":"Free Model","isFree":true,"context_length":1234},
+			{"id":"free/model","name":"Duplicate","isFree":true}
+		]}`))
+	}))
+	defer server.Close()
+	endpointMu.Lock()
+	kiloModelsURL = server.URL
+	endpointMu.Unlock()
+
+	ids, err := fetchKiloCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "free/model" {
+		t.Fatalf("filtered IDs = %#v", ids)
+	}
+	metadata, ok := kiloCatalogModelFor("free/model")
+	if !ok || metadata.Name != "Free Model" || metadata.Context != 1234 {
+		t.Fatalf("stored metadata = %#v, present=%v", metadata, ok)
+	}
+	if _, ok := kiloCatalogModelFor("paid/model"); ok {
+		t.Fatal("paid model was stored in free catalog")
+	}
+}
+
+func TestKiloCatalogModelExpired(t *testing.T) {
+	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		expiration string
+		expected   bool
+	}{
+		{name: "empty", expected: false},
+		{name: "invalid", expiration: "not-a-date", expected: false},
+		{name: "date before", expiration: "2026-09-13", expected: true},
+		{name: "date after", expiration: "2026-09-15", expected: false},
+		{name: "rfc3339 before", expiration: "2026-09-13T23:59:59Z", expected: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := kiloCatalogModel{Expiration: tc.expiration}
+			if got := kiloCatalogModelExpired(model, now); got != tc.expected {
+				t.Fatalf("expired(%q) = %v, want %v", tc.expiration, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestExecutorRefreshMissKeepsModelNotFoundOnRefreshFailure(t *testing.T) {
+	originalRefresher := kiloRefresher
+	defer func() { kiloRefresher = originalRefresher }()
+	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return nil, errors.New("catalog unavailable")
+	}, nil)
+	response, _ := handleExecutorExecute([]byte(`{"Model":"missing-free","Messages":[]}`))
+	if !strings.Contains(string(response), `"model_refresh_failed"`) {
+		t.Fatalf("refresh failure returned unexpected response: %s", response)
+	}
+}
