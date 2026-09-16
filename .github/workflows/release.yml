@@ -321,7 +321,11 @@ jobs:
           CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -ldflags "-X main.pluginVersion=${RELEASE_VERSION}" -buildmode=c-shared -o "$archive_dir/${BINARY_NAME}${ext}" .
 
           cd "$workspace"
-          zip -j "dist/$archive_name" "$archive_dir/${BINARY_NAME}${ext}"
+          if [[ "$GOOS" == "windows" ]]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
+          else
+            zip -j "dist/$archive_name" "$archive_dir/${BINARY_NAME}${ext}"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.plugin }}-${{ matrix.target }}
