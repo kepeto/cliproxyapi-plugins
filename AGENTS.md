@@ -4,7 +4,7 @@ This repository contains out-of-tree CLIProxyAPI provider plugins implemented as
 
 ## Scope and repository layout
 
-- `plugins/nous-portal`, `plugins/nous-portal-free`, `plugins/opencode-free`, and `plugins/kilo-free` are production plugins.
+- `plugins/nous-portal-free`, `plugins/opencode-free`, and `plugins/kilo-free` are production plugins.
 - `shared` is a reusable Go module used by the production plugins.
 - `plugins/playground` is experimental/development tooling and is not part of the production `Makefile` build. Its local CLIProxyAPI replacement path is machine-specific; do not assume it is reproducible in a clean checkout until that dependency is made portable.
 - There is no root `go.mod` or `go.work`. Go commands must be run per module; a root-level `go test ./...` is not a valid repository check.
@@ -28,10 +28,10 @@ go test ./...
 go vet ./...
 ```
 
-Do not format unrelated modules merely for convenience. Before submitting a change that affects shared code, run the checks for `shared` and all four production plugin modules because their `replace` directives resolve `shared` from the checkout:
+Before submitting a change that affects shared code, run the checks for `shared` and all three production plugin modules because their `replace` directives resolve `shared` from the checkout:
 
 ```bash
-for dir in shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do
+for dir in shared plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do
   (cd "$dir" && go test ./... && go vet ./...)
 done
 ```
@@ -65,8 +65,8 @@ go test -race ./...
 - Do not hot-swap or remove a loaded Go plugin while CLIProxyAPI is running. Restart the host service after deployment; see `docs/postmortem-plugin-hotswap-segv.md`.
 - Treat release artifacts, registry metadata, and version strings as one consistency boundary. For CPA compatibility, release tags MUST use `v<semver>` (for example `v0.1.35`), never plugin-specific tags such as `opencode-free-v0.1.35`. Plugin identity belongs in the registry ID, runtime registration, and asset filename prefix.
 - A plugin update is complete only when its canonical `v<semver>` GitHub release, all supported platform assets, and the corresponding plugin entry in `registry.json` on `main` are updated. Registry artifact URLs, SHA-256 digests, and sizes MUST match the actual release assets.
+- CPA plugin-store configuration SHOULD use `https://raw.githubusercontent.com/kepeto/cliproxyapi-plugins/refs/heads/main/registry.json`. The shorter `/main/registry.json` path serves equivalent bytes in direct HTTP checks, but the `/refs/heads/main/` form is the proven dashboard-compatible URL.
 - Pushes are separate release stages: source/workflow commit to `main`, release build/assets, and registry commit to `main`. Verify each stage independently. Registry automation MUST push explicitly with `git push origin HEAD:refs/heads/main` because `main` may be an ambiguous ref.
-- Before changing supported platforms, update the release workflow, registry generation, README, and tests together.
 - Do not put credentials, access tokens, private URLs, or local machine paths into committed source, tests, logs, or documentation.
 - Review release-workflow changes carefully: release automation publishes binaries and updates `registry.json`.
 

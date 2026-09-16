@@ -7,8 +7,7 @@ Not a fork of CPA — these are out-of-tree provider plugins loaded via CPA's pl
 
 | Plugin | Provider | Auth | Models |
 |--------|----------|------|--------|
-| `nous-portal` | Nous Portal | OAuth device-code | All upstream models |
-| `nous-portal-free` | Nous Portal (free tier) | OAuth device-code | Free models only (`:free` suffix or name contains "free") |
+| `nous-portal-free` | Nous Portal | OAuth device-code | Free models only (`:free` suffix or name contains "free") |
 | `opencode-free` | OpenCode Zen | None (`Bearer public`) | Dynamic free model list from upstream `/models` |
 | `kilo-free` | KiloCode | None (keyless) | Dynamic free model catalog from upstream `/models` |
 
@@ -55,10 +54,11 @@ systemctl --user restart cli-proxy-api.service
 
 Release workflow inputs identify the plugin separately, while GitHub release tags
 use CPA-compatible `v<semver>` names such as `v0.1.35`. Asset filenames remain
-plugin-specific, for example `opencode-free_0.1.35_linux_amd64.zip`. The update
-is complete only after the matching plugin entry in `registry.json` on `main` is
-updated with the canonical release URLs, checksums, and sizes.
-
+plugin-specific, for example `opencode-free_0.1.35_linux_amd64.zip`. Configure
+CPA's plugin store with the proven URL
+`https://raw.githubusercontent.com/kepeto/cliproxyapi-plugins/refs/heads/main/registry.json`.
+The update is complete only after the matching plugin entry in `registry.json` on
+`main` is updated with the canonical release URLs, checksums, and sizes.
 
 ## Configure
 
@@ -69,15 +69,6 @@ plugins:
   enabled: true
   dir: "plugins"
   configs:
-    nous-portal:
-      enabled: true
-      priority: 1
-      portal_base_url: "https://portal.nousresearch.com"
-      inference_base_url: "https://inference-api.nousresearch.com/v1"
-      client_id: "hermes-cli"
-      scope: "inference:invoke"
-      model_aliases:
-        all-models: "google/gemini-3-flash-preview"
     nous-portal-free:
       enabled: true
       priority: 1
@@ -148,12 +139,10 @@ curl -s -X POST http://localhost:8317/v1/chat/completions \
   sooner while the catalog is empty.
 - `nous-portal-free` refreshes an authenticated/free catalog and falls back to
   a vetted free-only list; authenticated catalog data is retained per account.
-- `nous-portal` exposes the upstream catalog and has a static fallback.
 - New upstream models are discovered without rebuilding the plugin.
 - `model_aliases` are applied on `plugin.reconfigure`; configuration entries
-  override host aliases. OpenCode/Kilo require a live-catalog target, Nous full
-  forwards the configured upstream ID, and Nous Free requires a cached,
-  allowlisted, or `:free` target.
+  override host aliases. OpenCode/Kilo require a live-catalog target, and Nous
+  Free requires a cached, allowlisted, or `:free` target.
 - Free plugins run model-specific background probes every 15 minutes. A failed
   probe or limit/server/timeout/invalid response hides that model immediately;
   a successful later probe clears the state and makes it visible again.
