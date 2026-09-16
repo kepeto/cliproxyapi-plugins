@@ -24,7 +24,6 @@ jobs:
           cache: true
           cache-dependency-path: |
             shared/go.sum
-            plugins/nous-portal/go.sum
             plugins/nous-portal-free/go.sum
             plugins/opencode-free/go.sum
             plugins/kilo-free/go.sum

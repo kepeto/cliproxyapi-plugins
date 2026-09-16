@@ -44,21 +44,21 @@ Output: `<plugin>.so` in each plugin directory.
 
 Use the version-safe deployment target for one plugin at a time. It normalizes
 the embedded release version, installs only the selected versioned file into
-CPA's plugin directory, updates that plugin's store version, and verifies the
-selected artifact.
+CPA's plugin directory, and verifies the selected artifact.
 
 ```bash
 make deploy PLUGIN=opencode-free
 systemctl --user restart cli-proxy-api.service
 ```
 
-Release workflow inputs identify the plugin separately, while GitHub release tags
-use CPA-compatible `v<semver>` names such as `v0.1.35`. Asset filenames remain
-plugin-specific, for example `opencode-free_0.1.35_linux_amd64.zip`. Configure
-CPA's plugin store with the proven URL
+Releases are repository snapshots: a canonical `v<semver>` tag publishes every
+production plugin asset for that version, even when only one plugin changed.
+This is required because CPA resolves the latest GitHub release for the store
+repository globally. Asset filenames remain plugin-specific, for example
+`opencode-free_0.1.36_linux_amd64.zip`. Configure CPA's plugin store with:
 `https://raw.githubusercontent.com/kepeto/cliproxyapi-plugins/refs/heads/main/registry.json`.
-The update is complete only after the matching plugin entry in `registry.json` on
-`main` is updated with the canonical release URLs, checksums, and sizes.
+The registry entry for every plugin points to the same complete release and
+contains the matching artifact URLs, checksums, and sizes.
 
 ## Configure
 

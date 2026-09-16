@@ -233,11 +233,10 @@ Hermes **cannot** access Nous Portal free models without authentication. The "fr
 - OpenRouter actually has keyless free models (no auth required for some).
 - Route `tencent/hy3:free` → `openrouter/tencent/hy3:free` with OpenRouter API key or keyless tier.
 - This aligns with Hermes' own warning: "run `/model openrouter:{_model}` to use OpenRouter."
-
-**Option C: Drop `nous-portal-free` entirely**
-- Use `nous-portal` (paid/OAuth) for Nous Portal models.
+**Option C: Drop this plugin entirely**
+- Keep `nous-portal-free` as the authenticated Nous free-model connector.
 - Use `opencode-free`/`kilo-free` for keyless free models.
-- Remove misleading "free" plugin.
+- Do not reintroduce a separate full-catalog Nous plugin unless scope changes.
 
 ### 7.2 For CPA Plugin Ecosystem
 

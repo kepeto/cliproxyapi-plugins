@@ -3,7 +3,7 @@ package main
 /*
 #include <stdint.h>
 #include <stdlib.h>
-
+#include <stdio.h>
 typedef struct {
 	void* ptr;
 	size_t len;
@@ -54,14 +54,32 @@ static void free_host_buffer(void* ptr, size_t len) {
 		stored_host->free_buffer(ptr, len);
 	}
 }
+
+static int persist_auth_json(const char* name, const uint8_t* json, size_t json_len) {
+	if (name == NULL || json == NULL || json_len == 0) {
+		return 1;
+	}
+	char* request = NULL;
+	int needed = snprintf(NULL, 0, "{\"name\":\"%s\",\"json\":%.*s}", name, (int)json_len, (const char*)json);
+	if (needed < 0) return 1;
+	request = (char*)malloc((size_t)needed + 1);
+	if (request == NULL) return 1;
+	snprintf(request, (size_t)needed + 1, "{\"name\":\"%s\",\"json\":%.*s}", name, (int)json_len, (const char*)json);
+	cliproxy_buffer response = {0};
+	int status = call_host_api("host.auth.save", (const uint8_t*)request, (size_t)needed, &response);
+	free(request);
+	if (response.ptr != NULL) free_host_buffer(response.ptr, response.len);
+	return status;
+}
 */
 import "C"
 
 import (
+	"encoding/json"
 	"fmt"
+	"unsafe"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
-	"unsafe"
 )
 
 // pluginVersion is injected at build time via -ldflags.
@@ -217,6 +235,25 @@ func okEnvelopeJSONStr(result string) ([]byte, error) {
 
 func errorEnvelope(code, message string) []byte {
 	return shared.ErrorEnvelope(code, message)
+}
+
+// persistNousAuth asks CPA to atomically persist refreshed provider state.
+// Direct filesystem writes are intentionally avoided: the host owns auth
+// indexing, permissions, and in-memory manager synchronization.
+func persistNousAuth(store storageJSON) error {
+	if store.FileName == "" {
+		return nil
+	}
+	raw, err := json.Marshal(store)
+	if err != nil {
+		return err
+	}
+	name := C.CString(store.FileName)
+	defer C.free(unsafe.Pointer(name))
+	if C.persist_auth_json(name, (*C.uint8_t)(unsafe.Pointer(&raw[0])), C.size_t(len(raw))) != 0 {
+		return fmt.Errorf("host.auth.save failed")
+	}
+	return nil
 }
 
 func errorEnvelopeWithStatus(code, message string, status int) []byte {

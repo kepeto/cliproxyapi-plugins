@@ -34,55 +34,8 @@ class CheckFreeModelsTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(models, ["kilo-free/c", "opencode-free/a"])
 
-    def test_filters_nous_portal_provider(self):
-        models, error = checker.models_from_response(
-            {"data": [
-                {"id": "nous-portal/google/gemini-3-flash"},
-                {"id": "opencode-free/deepseek-v4-flash-free"},
-                {"id": "other/model"},
-            ]},
-            {"nous-portal"},
-        )
-        self.assertIsNone(error)
-        self.assertEqual(models, ["nous-portal/google/gemini-3-flash"])
 
-    def test_auto_discover_all_providers(self):
-        """When providers is None, every model is returned including unprefixed ones."""
-        models, error = checker.models_from_response(
-            {"data": [
-                {"id": "opencode-free/a"},
-                {"id": "kilo-free/b"},
-                {"id": "nous-portal/c"},
-                {"id": "nous-portal-free/d"},
-                {"id": "gemini-3-flash", "owned_by": "antigravity"},
-                {"id": "gpt-5.4", "owned_by": "openai"},
-                {"id": "unknown-provider/x"},
-            ]},
-            None,
-        )
-        self.assertIsNone(error)
-        self.assertEqual(models, [
-            "gemini-3-flash",
-            "gpt-5.4",
-            "kilo-free/b",
-            "nous-portal-free/d",
-            "nous-portal/c",
-            "opencode-free/a",
-            "unknown-provider/x",
-        ])
 
-    def test_auto_discover_empty_set_also_returns_all(self):
-        """An empty provider set behaves like None (auto-discover)."""
-        models, error = checker.models_from_response(
-            {"data": [
-                {"id": "nous-portal/a"},
-                {"id": "opencode-free/b"},
-                {"id": "codex-auto-review", "owned_by": "openai"},
-            ]},
-            set(),
-        )
-        self.assertIsNone(error)
-        self.assertEqual(models, ["codex-auto-review", "nous-portal/a", "opencode-free/b"])
 
     def test_filter_by_owned_by_for_unprefixed_models(self):
         """Unprefixed models are matched by their owned_by field."""

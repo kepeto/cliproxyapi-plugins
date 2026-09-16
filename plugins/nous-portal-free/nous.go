@@ -23,6 +23,7 @@ const (
 	// credentials inside this lead are treated as expired.
 	invokeJWTMinTTL = 120 * time.Second
 )
+const modelCatalogMaxAge = 24 * time.Hour
 
 // deviceCodeResponse is the OAuth 2.0 device authorization response.
 type deviceCodeResponse struct {
@@ -264,7 +265,11 @@ func nousHealthScope(store storageJSON) string {
 	return ProviderID + "|" + shared.TrimHTTP(store.InferenceBaseURL) + "|" + account
 }
 
+// storageJSON is the persisted auth blob stored by the host under the "nous-portal-free" type.
+// Type is persisted explicitly because CPA reparses the file after restart; metadata
+// returned by auth.parse is not part of the saved StorageJSON blob.
 type storageJSON struct {
+	Type             string    `json:"type"`
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`
 	ExpiresAt        time.Time `json:"expires_at,omitzero"`
@@ -275,6 +280,7 @@ type storageJSON struct {
 	AccountID        string    `json:"account_id,omitempty"`
 	FileName         string    `json:"file_name,omitempty"`
 	ModelCatalog     []byte    `json:"model_catalog,omitempty"`
+	ModelCatalogAt   time.Time `json:"model_catalog_at,omitzero"`
 	Email            string    `json:"email,omitempty"`
 	OrgName          string    `json:"org_name,omitempty"`
 }

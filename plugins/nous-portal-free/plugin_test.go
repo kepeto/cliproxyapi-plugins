@@ -331,20 +331,47 @@ func TestAuthParseExposesEmailAndQuota(t *testing.T) {
 		Result struct {
 			Handled bool `json:"Handled"`
 			Auth    struct {
-				Label    string         `json:"Label"`
-				Metadata map[string]any `json:"Metadata"`
+				Label       string         `json:"Label"`
+				Provider    string         `json:"Provider"`
+				StorageJSON []byte         `json:"StorageJSON"`
+				Metadata    map[string]any `json:"Metadata"`
 			} `json:"Auth"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(response, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.Result.Handled || !strings.Contains(result.Result.Auth.Label, "user@example.test") {
-		t.Fatalf("identity missing from label: %s", response)
+	if !result.Result.Handled || result.Result.Auth.Provider != ProviderID || !strings.Contains(result.Result.Auth.Label, "user@example.test") {
+		t.Fatalf("identity/provider missing: %s", response)
+	}
+	parsed := decodeStorage(result.Result.Auth.StorageJSON)
+	if parsed.Type != ProviderID {
+		t.Fatalf("persisted auth type = %q, want %q: %s", parsed.Type, ProviderID, response)
 	}
 	meta := result.Result.Auth.Metadata
 	if meta["username"] != "user@example.test" || meta["spend_usd"] != "0.42" || meta["spend_remaining_usd"] != "4.58" {
 		t.Fatalf("quota metadata incorrect: %s", response)
+	}
+}
+
+func TestAuthDataCarriesNextRefreshAfter(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour).UTC()
+	store := storageJSON{
+		AccessToken:      "token",
+		InferenceBaseURL: "https://example.test/v1",
+		ExpiresAt:        expiresAt,
+	}
+	auth := buildAuthDataWithID(store, ProviderID, "nous-portal-free.json", "Nous Portal Free", "account-1", nil)
+	next, ok := auth["NextRefreshAfter"].(string)
+	if !ok || next == "" {
+		t.Fatalf("NextRefreshAfter missing: %#v", auth)
+	}
+	parsed, err := time.Parse(time.RFC3339, next)
+	if err != nil {
+		t.Fatalf("NextRefreshAfter invalid: %q: %v", next, err)
+	}
+	if parsed.Before(expiresAt.Add(-refreshSkew-time.Second)) || parsed.After(expiresAt.Add(-refreshSkew+time.Second)) {
+		t.Fatalf("NextRefreshAfter=%s, want approximately expiry-skew=%s", parsed, expiresAt.Add(-refreshSkew))
 	}
 }
 
@@ -609,8 +636,36 @@ func TestAuthParsePreservesExpiredAccountIdentity(t *testing.T) {
 	}
 }
 
+func TestAuthParseNormalizesLegacyProviderFile(t *testing.T) {
+	storage := []byte(`{"access_token":"token","refresh_token":"refresh","inference_base_url":"https://example.test/v1"}`)
+	request, err := json.Marshal(map[string]any{"FileName": "nous-portal-free-2.json", "RawJSON": storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ := handleAuthParse(request)
+	var result struct {
+		Result struct {
+			Handled bool `json:"Handled"`
+			Auth    struct {
+				Provider    string `json:"Provider"`
+				StorageJSON []byte `json:"StorageJSON"`
+			} `json:"Auth"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Result.Handled || result.Result.Auth.Provider != ProviderID {
+		t.Fatalf("legacy credential was not handled: %s", response)
+	}
+	if got := decodeStorage(result.Result.Auth.StorageJSON).Type; got != ProviderID {
+		t.Fatalf("normalized type = %q, want %q: %s", got, ProviderID, response)
+	}
+}
+
 func TestExpiredStorageRemainsLoadable(t *testing.T) {
 	storage := storageJSON{
+		Type:             ProviderID,
 		AccessToken:      "expired",
 		InferenceBaseURL: "https://example.test/v1",
 		ExpiresAt:        time.Now().Add(-time.Minute),
@@ -638,23 +693,50 @@ func TestNearExpiryTokenTriggersRefresh(t *testing.T) {
 	}
 }
 
-func TestFreeModelAllowedUsesFilteredSources(t *testing.T) {
+func TestFreeModelAllowedUsesAuthoritativeSources(t *testing.T) {
+	originalRefresher := nousRefresher
+	defer func() { nousRefresher = originalRefresher }()
+	nousRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"live/model:free"}, nil
+	}, nil)
+	if err := nousRefresher.Refresh(); err != nil {
+		t.Fatal(err)
+	}
 	cache, err := json.Marshal([]rawCatalogModel{{ID: "cached/model:free"}, {ID: "paid/model"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := storageJSON{ModelCatalog: cache}
+	store := storageJSON{ModelCatalog: cache, ModelCatalogAt: time.Now().UTC()}
 	if !freeModelAllowed(store, "cached/model:free") {
 		t.Fatal("cached free model rejected")
 	}
 	if freeModelAllowed(store, "paid/model") {
 		t.Fatal("paid model accepted")
 	}
-	if !freeModelAllowed(storageJSON{}, fallbackModels[0]) {
-		t.Fatal("audited fallback model rejected")
+	if freeModelAllowed(storageJSON{}, "live/model:free") == false {
+		t.Fatal("live catalog model rejected")
 	}
-	if freeModelAllowed(storageJSON{}, "provider/paid") {
-		t.Fatal("unlisted model accepted")
+	if freeModelAllowed(storageJSON{}, fallbackModels[0]) {
+		t.Fatal("unlisted fallback model accepted")
+	}
+	if freeModelAllowed(storageJSON{}, "provider/arbitrary:free") {
+		t.Fatal("arbitrary :free model accepted")
+	}
+}
+
+func TestFreeModelAllowedRejectsMissingOrStaleCatalog(t *testing.T) {
+	cache, err := json.Marshal([]rawCatalogModel{{ID: "cached/model:free"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freeModelAllowed(storageJSON{ModelCatalog: cache}, "cached/model:free") {
+		t.Fatal("catalog without confirmation timestamp was accepted")
+	}
+	if freeModelAllowed(storageJSON{
+		ModelCatalog:   cache,
+		ModelCatalogAt: time.Now().Add(-modelCatalogMaxAge - time.Minute),
+	}, "cached/model:free") {
+		t.Fatal("stale catalog was accepted")
 	}
 }
 
@@ -693,6 +775,7 @@ func TestNousProbeHidesAndRestoresModel(t *testing.T) {
 		InferenceBaseURL: server.URL,
 		AccountID:        "account-probe",
 		ModelCatalog:     cache,
+		ModelCatalogAt:   time.Now().UTC(),
 	}
 	scope := nousHealthScope(store)
 	rememberNousProbeStore(store)
@@ -853,5 +936,41 @@ func TestAuthRefreshSingleflight(t *testing.T) {
 		if len(response) == 0 {
 			t.Fatalf("response %d is empty", i)
 		}
+	}
+}
+
+func TestRefreshNousStoreIfNeededRefreshesOnlyNearExpiry(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("x-nous-refresh-token") != "refresh-token" {
+			t.Fatalf("refresh header = %q", r.Header.Get("x-nous-refresh-token"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-token","refresh_token":"new-refresh","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	store := storageJSON{
+		AccessToken:      "old-token",
+		RefreshToken:     "refresh-token",
+		ExpiresAt:        time.Now().Add(time.Minute),
+		PortalBaseURL:    server.URL,
+		InferenceBaseURL: server.URL + "/v1",
+		AccountID:        "internal-refresh-account",
+	}
+	rememberNousProbeStore(store)
+	got, ok := refreshNousStoreIfNeeded(store)
+	if !ok || got.AccessToken != "new-token" || got.RefreshToken != "new-refresh" {
+		t.Fatalf("refreshNousStoreIfNeeded() = %#v, %v", got, ok)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("refresh calls = %d, want 1", calls.Load())
+	}
+
+	// A second request uses the in-memory refreshed state and does not refresh again.
+	got, ok = refreshNousStoreIfNeeded(store)
+	if !ok || got.AccessToken != "new-token" || calls.Load() != 1 {
+		t.Fatalf("cached refresh = %#v, %v, calls=%d", got, ok, calls.Load())
 	}
 }

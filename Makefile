@@ -1,5 +1,5 @@
 CGO ?= 1
-PLUGINS := nous-portal nous-portal-free opencode-free kilo-free
+PLUGINS := nous-portal-free opencode-free kilo-free
 DIST := dist
 
 normalize_version = $(patsubst v%,%,$(strip $(1)))
@@ -27,19 +27,19 @@ help:
 build: $(if $(PLUGIN),$(PLUGIN),$(PLUGINS))
 
 test:
-	@for dir in shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do \
+	@for dir in shared plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do \
 		echo "== test $$dir =="; \
 		(cd "$$dir" && go test ./...) || exit 1; \
 	done
 
 vet:
-	@for dir in shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do \
+	@for dir in shared plugins/nous-portal-free plugins/opencode-free plugins/kilo-free; do \
 		echo "== vet $$dir =="; \
 		(cd "$$dir" && go vet ./...) || exit 1; \
 	done
 
 fmt-check:
-	@files="$$(find shared plugins/nous-portal plugins/nous-portal-free plugins/opencode-free plugins/kilo-free -name '*.go' -not -path '*/vendor/*' -print)"; \
+	@files="$$(find shared plugins/nous-portal-free plugins/opencode-free plugins/kilo-free -name '*.go' -not -path '*/vendor/*' -print)"; \
 	unformatted="$$(gofmt -l $$files)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "unformatted Go files:"; echo "$$unformatted"; exit 1; \
@@ -105,21 +105,18 @@ verify-deploy:
 
 arch-linux-amd64:
 	mkdir -p $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-amd64.so ./plugins/nous-portal
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-amd64.so ./plugins/nous-portal-free
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-amd64.so ./plugins/opencode-free
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-amd64.so ./plugins/kilo-free
 
 arch-linux-arm64:
 	mkdir -p $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-arm64.so ./plugins/nous-portal
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-arm64.so ./plugins/nous-portal-free
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-arm64.so ./plugins/opencode-free
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=$(CC_ARM64) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-arm64.so ./plugins/kilo-free
 
 arch-linux-arm:
 	mkdir -p $(DIST)
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-linux-arm.so ./plugins/nous-portal
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/nous-portal-free-linux-arm.so ./plugins/nous-portal-free
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/opencode-free-linux-arm.so ./plugins/opencode-free
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) go build $(LDFLAGS) -buildmode=c-shared -o $(DIST)/kilo-free-linux-arm.so ./plugins/kilo-free

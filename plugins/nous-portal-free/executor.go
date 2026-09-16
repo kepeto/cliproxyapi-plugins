@@ -40,6 +40,7 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		return errorEnvelope("executor_execute_failed", "invalid request: "+err.Error()), nil
 	}
 	store := decodeStorage(req.StorageJSON)
+	store, _ = refreshNousStoreIfNeeded(store)
 	if !store.valid() {
 		return errorEnvelopeWithStatus("auth_required", "nous-portal-free credential required", 401), nil
 	}
@@ -90,6 +91,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		return errorEnvelope("executor_stream_failed", "invalid request: "+err.Error()), nil
 	}
 	store := decodeStorage(req.StorageJSON)
+	store, _ = refreshNousStoreIfNeeded(store)
 	if !store.valid() {
 		return errorEnvelopeWithStatus("auth_required", "nous-portal-free credential required", 401), nil
 	}

@@ -6,17 +6,8 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      plugin:
-        description: "Plugin ID to release"
-        required: true
-        type: choice
-        options:
-          - nous-portal
-          - nous-portal-free
-          - opencode-free
-          - kilo-free
       version:
-        description: "Semver without v, e.g. 0.1.34"
+        description: "Semver without v, e.g. 0.1.36"
         required: true
         type: string
 
@@ -26,7 +17,6 @@ permissions:
 jobs:
   prepare-release:
     outputs:
-      plugin: ${{ steps.release-vars.outputs.plugin }}
       version: ${{ steps.release-vars.outputs.version }}
       tag: ${{ steps.release-vars.outputs.tag }}
     runs-on: ubuntu-latest
@@ -39,41 +29,28 @@ jobs:
         id: release-vars
         shell: bash
         env:
-          INPUT_PLUGIN: ${{ inputs.plugin }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            plugin="$INPUT_PLUGIN"
             version="$INPUT_VERSION"
             tag="v${version}"
           else
-            source_tag="$GITHUB_REF_NAME"
-            if [[ "$source_tag" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)-v([0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?)$ ]]; then
-              plugin="${BASH_REMATCH[1]}"
-              version="${BASH_REMATCH[2]}"
-              tag="v${version}"
-            elif [[ "$source_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?)$ ]]; then
-              echo "plugin-specific tag required for push-triggered releases: '$source_tag'" >&2
-              exit 1
-            else
-              echo "release tag must be v<semver> or <plugin>-v<semver>, got '$source_tag'" >&2
+            tag="$GITHUB_REF_NAME"
+            if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?)$ ]]; then
+              echo "release tag must be v<semver>, got '$tag'" >&2
               exit 1
             fi
-          fi
-          if [[ ! "$plugin" =~ ^(nous-portal|nous-portal-free|opencode-free|kilo-free)$ ]]; then
-            echo "unknown plugin '$plugin'" >&2
-            exit 1
+            version="${BASH_REMATCH[1]}"
           fi
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
             echo "invalid semver '$version'" >&2
             exit 1
           fi
-          echo "plugin=$plugin" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "PLUGIN=$plugin" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          # version and tag outputs are the single release contract.
 
       - name: Create release
         env:
@@ -90,30 +67,12 @@ jobs:
           <!-- plugin-release-assets:start -->
           ## Release Assets
 
-          - `nous-portal_<version>_<os>_<arch>.zip` — `.so` Linux, `.dylib` macOS.
-          - `nous-portal_<version>_windows_<arch>.zip` — `.dll` plugin for Windows.
           - `nous-portal-free_<version>_<os>_<arch>.zip` — free Nous Portal plugin.
           - `opencode-free_<version>_<os>_<arch>.zip` — OpenCode Zen free plugin.
           - `kilo-free_<version>_<os>_<arch>.zip` — KiloCode free plugin.
-          - `registry.json` — plugin store registry.
+          - `registry.json` — complete plugin store registry.
           <!-- plugin-release-assets:end -->
           NOTES
-
-          git fetch --force --tags
-          previous_tag=""
-          if previous_tag_value="$(git describe --tags --abbrev=0 "${{ steps.release-vars.outputs.tag }}^" 2>/dev/null)"; then
-            previous_tag="$previous_tag_value"
-            changelog_range="${previous_tag}..${{ steps.release-vars.outputs.tag }}"
-          else
-            changelog_range="${{ steps.release-vars.outputs.tag }}"
-          fi
-
-          git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" |
-            grep -Ev '^- (docs:|test:)' > "$changelog_entries_file" || true
-
-          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="${{ steps.release-vars.outputs.tag }}" \
-            --jq .body > "$generated_notes_file" || true
           if [[ ! -s "$generated_notes_file" ]]; then
             if [[ -n "$previous_tag" ]]; then
               printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$previous_tag" "${{ steps.release-vars.outputs.tag }}" > "$generated_notes_file"
@@ -147,62 +106,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - plugin: nous-portal
-            plugin_dir: plugins/nous-portal
-            binary_name: nous-portal
-            target: linux-amd64
-            runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            asset_arch: amd64
-            archive_format: zip
-          - plugin: nous-portal
-            plugin_dir: plugins/nous-portal
-            binary_name: nous-portal
-            target: linux-arm64
-            runner: ubuntu-24.04-arm
-            goos: linux
-            goarch: arm64
-            asset_arch: arm64
-            archive_format: zip
-          - plugin: nous-portal
-            plugin_dir: plugins/nous-portal
-            binary_name: nous-portal
-            target: linux-arm
-            runner: ubuntu-latest
-            goos: linux
-            goarch: arm
-            asset_arch: arm
-            archive_format: zip
-            cross: gcc-arm-linux-gnueabihf
-            cc: arm-linux-gnueabihf-gcc
-          - plugin: nous-portal
-            plugin_dir: plugins/nous-portal
-            binary_name: nous-portal
-            target: darwin-amd64
-            runner: macos-15-intel
-            goos: darwin
-            goarch: amd64
-            asset_arch: amd64
-            archive_format: zip
-          - plugin: nous-portal
-            plugin_dir: plugins/nous-portal
-            binary_name: nous-portal
-            target: darwin-arm64
-            runner: macos-15
-            goos: darwin
-            goarch: arm64
-            asset_arch: arm64
-            archive_format: zip
-          - plugin: nous-portal
-            plugin_dir: plugins/nous-portal
-            binary_name: nous-portal
-            target: windows-amd64
-            runner: windows-latest
-            goos: windows
-            goarch: amd64
-            asset_arch: amd64
-            archive_format: zip
           - plugin: nous-portal-free
             plugin_dir: plugins/nous-portal-free
             binary_name: nous-portal-free
@@ -395,7 +298,6 @@ jobs:
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build plugin
-        if: matrix.plugin == needs.prepare-release.outputs.plugin
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -417,11 +319,7 @@ jobs:
           elif [[ "$GOOS" == "darwin" ]]; then
             ext=".dylib"
           fi
-          if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
-            archive_name="${BINARY_NAME}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
-          else
-            archive_name="${BINARY_NAME}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
-          fi
+          archive_name="${BINARY_NAME}_${RELEASE_VERSION}_${GOOS}_${ASSET_ARCH}.zip"
           rm -rf "$archive_dir"
           mkdir -p "$archive_dir"
 
@@ -429,32 +327,20 @@ jobs:
           CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC" go build -ldflags "-X main.pluginVersion=${RELEASE_VERSION}" -buildmode=c-shared -o "$archive_dir/${BINARY_NAME}${ext}" .
 
           cd "$workspace"
-          if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
-            if [[ "$GOOS" == "windows" ]]; then
-              powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
-            else
-              zip -j "dist/$archive_name" "$archive_dir/${BINARY_NAME}${ext}"
-            fi
-          else
-            tar -C "$archive_dir" -czf "dist/$archive_name" "${BINARY_NAME}${ext}"
-          fi
+          zip -j "dist/$archive_name" "$archive_dir/${BINARY_NAME}${ext}"
       - uses: actions/upload-artifact@v4
-        if: matrix.plugin == needs.prepare-release.outputs.plugin
         with:
           name: ${{ matrix.plugin }}-${{ matrix.target }}
-          path: |
-            dist/*.tar.gz
-            dist/*.zip
+          path: dist/*.zip
           if-no-files-found: error
       - name: Upload release assets
-        if: matrix.plugin == needs.prepare-release.outputs.plugin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(dist/*.tar.gz dist/*.zip)
+          assets=(dist/*.zip)
           if [[ ${#assets[@]} -eq 0 ]]; then
             printf 'expected archive assets, found %s\n' "${#assets[@]}" >&2
             exit 1
@@ -465,31 +351,29 @@ jobs:
     name: generate plugin store registry
     needs: [prepare-release, build]
     env:
-      PLUGIN: ${{ needs.prepare-release.outputs.plugin }}
       RELEASE_VERSION: ${{ needs.prepare-release.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Download selected release assets
+      - name: Download complete release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          gh release download "${{ needs.prepare-release.outputs.tag }}" --pattern "${{ needs.prepare-release.outputs.plugin }}_*.zip" --dir "$GITHUB_WORKSPACE/dist" --clobber
+          gh release download "$RELEASE_TAG" --pattern '*_*.zip' --dir "$GITHUB_WORKSPACE/dist" --clobber
       - name: Generate registry.json
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/generate_registry.py \
-            --plugin "$PLUGIN" \
-            --tag "${{ needs.prepare-release.outputs.tag }}" \
-            --version "${{ needs.prepare-release.outputs.version }}" \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
             --dist "$GITHUB_WORKSPACE/dist" \
-            --existing "$GITHUB_WORKSPACE/registry.json" \
             --output "$GITHUB_WORKSPACE/registry.json"
       - name: Generate checksums.txt
         shell: bash
@@ -502,13 +386,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${{ needs.prepare-release.outputs.tag }}" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
+          gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/dist/checksums.txt" --clobber
       - name: Upload registry to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release upload "${{ needs.prepare-release.outputs.tag }}" "$GITHUB_WORKSPACE/registry.json" --clobber
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/registry.json" --clobber
       - name: Commit registry to main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -522,7 +407,6 @@ jobs:
           git checkout -B release-registry-main refs/remotes/origin/main
           git pull --ff-only origin main
           mv "$RUNNER_TEMP/registry.json" "$GITHUB_WORKSPACE/registry.json"
-
           git add registry.json
           if git diff --cached --quiet -- registry.json; then
             echo "registry.json is already current"

@@ -109,10 +109,24 @@ func handleAuthParse(raw []byte) ([]byte, error) {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
 	typ, _ := probe["type"].(string)
+	store := decodeStorage(storage)
+	// Older plugin versions omitted type from StorageJSON. Accept those files
+	// only when CPA supplied the provider-specific filename, then normalize the
+	// blob so the next persistence cycle is self-describing.
+	if strings.TrimSpace(typ) == "" {
+		name := strings.ToLower(strings.TrimSpace(filepath.Base(fileName)))
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		if stem != ProviderID && !strings.HasPrefix(stem, ProviderID+"-") {
+			return okEnvelopeJSON(`{"Handled":false}`)
+		}
+		typ = ProviderID
+	}
 	if strings.ToLower(strings.TrimSpace(typ)) != ProviderID {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
-	store := decodeStorage(storage)
+	if store.Type == "" {
+		store.Type = ProviderID
+	}
 	if !store.structuralValid() {
 		return okEnvelopeJSON(`{"Handled":false}`)
 	}
@@ -268,6 +282,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			fileName = "nous-portal-free.json"
 		}
 		store := storageJSON{
+			Type:             ProviderID,
 			AccessToken:      tok.AccessToken,
 			RefreshToken:     tok.RefreshToken,
 			ExpiresAt:        expiryFromToken(tok.AccessToken, tok.ExpiresIn),
@@ -356,6 +371,75 @@ func refreshError(body []byte, status int) []byte {
 	}
 }
 
+type refreshHTTPError struct {
+	body   []byte
+	status int
+}
+
+func (e *refreshHTTPError) Error() string { return "refresh returned " + strconv.Itoa(e.status) }
+
+// refreshStoredAuth rotates an account's access token and returns the complete
+// provider-owned state. It is shared by the host RPC path and the lightweight
+// internal refresh fallback.
+func refreshStoredAuth(store storageJSON) (storageJSON, error) {
+	if store.RefreshToken == "" {
+		return storageJSON{}, fmt.Errorf("no usable refresh token")
+	}
+	key := ProviderID + "|" + store.AccountID + "|" + store.PortalBaseURL + "|" + store.RefreshToken
+	call, leader := beginRefresh(key)
+	if !leader {
+		<-call.done
+		if call.err != nil {
+			return storageJSON{}, call.err
+		}
+		return decodeStorage(call.result), nil
+	}
+	var result []byte
+	var resultErr error
+	defer func() { finishRefresh(key, call, result, resultErr) }()
+
+	portal := firstNonEmpty(store.PortalBaseURL, defaultPortalBaseURL)
+	clientID := firstNonEmpty(store.ClientID, defaultClientID)
+	status, body, err := httpPostFormWithHeaders(portal, "/api/oauth/token",
+		map[string]string{"grant_type": "refresh_token", "client_id": clientID},
+		map[string]string{"x-nous-refresh-token": store.RefreshToken}, defaultRequestTimeout)
+	if err != nil {
+		resultErr = err
+		return storageJSON{}, err
+	}
+	if status != http.StatusOK {
+		resultErr = &refreshHTTPError{body: body, status: status}
+		return storageJSON{}, resultErr
+	}
+	var tok tokenResponse
+	if err := json.Unmarshal(body, &tok); err != nil {
+		resultErr = err
+		return storageJSON{}, err
+	}
+	if tok.AccessToken == "" {
+		resultErr = fmt.Errorf("refresh response missing access_token")
+		return storageJSON{}, resultErr
+	}
+	inferenceURL := firstNonEmpty(store.InferenceBaseURL, trimHTTP(tok.InferenceBaseURL))
+	if inferenceURL == "" {
+		resultErr = fmt.Errorf("refresh response missing inference_base_url")
+		return storageJSON{}, resultErr
+	}
+	next := store
+	if next.Type == "" {
+		next.Type = ProviderID
+	}
+	next.AccessToken = tok.AccessToken
+	next.RefreshToken = firstNonEmpty(tok.RefreshToken, store.RefreshToken)
+	next.ExpiresAt = expiryFromToken(tok.AccessToken, tok.ExpiresIn)
+	next.PortalBaseURL = portal
+	next.InferenceBaseURL = inferenceURL
+	next.ClientID = clientID
+	next.Scope = firstNonEmpty(tok.Scope, store.Scope)
+	result, _ = json.Marshal(next)
+	return next, nil
+}
+
 // handleAuthRefresh rotates the access token using the stored refresh token.
 func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 	var req struct {
@@ -366,68 +450,12 @@ func handleAuthRefresh(raw []byte) (result []byte, resultErr error) {
 		return errorEnvelope("refresh_failed", "invalid refresh request: "+err.Error()), nil
 	}
 	store := decodeStorage(req.StorageJSON)
-	if store.RefreshToken == "" {
-		return errorEnvelope("refresh_failed", "no usable refresh token"), nil
-	}
-	key := ProviderID + "|" + store.AccountID + "|" + store.PortalBaseURL + "|" + store.RefreshToken
-	call, leader := beginRefresh(key)
-	if !leader {
-		<-call.done
-		return call.result, call.err
-	}
-	defer func() {
-		finishRefresh(key, call, result, resultErr)
-	}()
-
-	portal := store.PortalBaseURL
-	if portal == "" {
-		portal = defaultPortalBaseURL
-	}
-	clientID := store.ClientID
-	if clientID == "" {
-		clientID = defaultClientID
-	}
-
-	status, body, err := httpPostFormWithHeaders(portal, "/api/oauth/token",
-		map[string]string{
-			"grant_type": "refresh_token",
-			"client_id":  clientID,
-		},
-		map[string]string{"x-nous-refresh-token": store.RefreshToken},
-		defaultRequestTimeout)
+	next, err := refreshStoredAuth(store)
 	if err != nil {
-		return errorEnvelope("refresh_failed", "refresh request failed: "+err.Error()), nil
-	}
-	if status != 200 {
-		return refreshError(body, status), nil
-	}
-	var tok tokenResponse
-	if err := json.Unmarshal(body, &tok); err != nil {
-		return errorEnvelope("refresh_failed", "invalid refresh response: "+err.Error()), nil
-	}
-	if tok.AccessToken == "" {
-		return errorEnvelope("refresh_failed", "refresh response missing access_token"), nil
-	}
-	inferenceURL := trimHTTP(store.InferenceBaseURL)
-	if inferenceURL == "" {
-		inferenceURL = trimHTTP(tok.InferenceBaseURL)
-	}
-	if inferenceURL == "" {
-		return errorEnvelope("refresh_failed", "refresh response missing inference_base_url"), nil
-	}
-	next := storageJSON{
-		AccessToken:      tok.AccessToken,
-		RefreshToken:     firstNonEmpty(tok.RefreshToken, store.RefreshToken),
-		ExpiresAt:        expiryFromToken(tok.AccessToken, tok.ExpiresIn),
-		PortalBaseURL:    portal,
-		InferenceBaseURL: inferenceURL,
-		ClientID:         clientID,
-		Scope:            firstNonEmpty(tok.Scope, store.Scope),
-		AccountID:        store.AccountID,
-		FileName:         store.FileName,
-		ModelCatalog:     store.ModelCatalog,
-		Email:            store.Email,
-		OrgName:          store.OrgName,
+		if httpErr, ok := err.(*refreshHTTPError); ok {
+			return refreshError(httpErr.body, httpErr.status), nil
+		}
+		return errorEnvelope("refresh_failed", err.Error()), nil
 	}
 	modelHealth.ResetScope(nousHealthScope(next))
 	rememberNousProbeStore(next)
@@ -571,12 +599,13 @@ func buildAuthData(store storageJSON, provider, fileName, label string, extraMet
 	}
 	storage, _ := json.Marshal(store)
 	return map[string]any{
-		"Provider":    provider,
-		"ID":          provider,
-		"FileName":    fileName,
-		"Label":       label,
-		"StorageJSON": storage,
-		"Metadata":    meta,
+		"Provider":         provider,
+		"ID":               provider,
+		"FileName":         fileName,
+		"Label":            label,
+		"StorageJSON":      storage,
+		"Metadata":         meta,
+		"NextRefreshAfter": nextRefreshAfter(store.ExpiresAt),
 		"Attributes": map[string]string{
 			"source":   "plugin:" + provider,
 			"provider": provider,
@@ -595,12 +624,13 @@ func buildAuthDataWithID(store storageJSON, provider, fileName, label, id string
 	}
 	storage, _ := json.Marshal(store)
 	return map[string]any{
-		"Provider":    provider,
-		"ID":          id,
-		"FileName":    fileName,
-		"Label":       label,
-		"StorageJSON": storage,
-		"Metadata":    meta,
+		"Provider":         provider,
+		"ID":               id,
+		"FileName":         fileName,
+		"Label":            label,
+		"StorageJSON":      storage,
+		"Metadata":         meta,
+		"NextRefreshAfter": nextRefreshAfter(store.ExpiresAt),
 		"Attributes": map[string]string{
 			"source":   "plugin:" + provider,
 			"provider": provider,

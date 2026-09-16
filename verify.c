@@ -112,7 +112,7 @@ static char* invoke(const char* method, const char* request, size_t request_len,
 }
 
 int main(int argc, char** argv) {
-    const char* so = argc > 1 ? argv[1] : "plugins/nous-portal/nous-portal.so";
+    const char* so = argc > 1 ? argv[1] : "plugins/nous-portal-free/nous-portal-free.so";
     printf("Verifying %s\n", so);
 
     void* handle = dlopen(so, RTLD_NOW | RTLD_LOCAL);

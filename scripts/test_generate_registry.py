@@ -19,37 +19,25 @@ class RegistryGeneratorTest(unittest.TestCase):
                     extension = {"linux": ".so", "darwin": ".dylib", "windows": ".dll"}[goos]
                     handle.writestr(f"{plugin}{extension}", b"plugin")
 
-    def test_generates_selected_plugin_registry(self) -> None:
+    def test_generates_complete_registry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            self.make_archives(root, "1.2.3", ("opencode-free",))
-            registry = generate_registry("1.2.3", "v1.2.3", root, ("opencode-free",))
-        self.assertEqual([plugin["id"] for plugin in registry["plugins"]], ["opencode-free"])
-        self.assertEqual(len(registry["plugins"][0]["install"]["artifacts"]), 6)
-        self.assertTrue(all(len(artifact["sha256"]) == 64 for artifact in registry["plugins"][0]["install"]["artifacts"]))
-
-    def test_selected_plugin_preserves_other_registry_entries(self) -> None:
+            self.make_archives(root, "1.2.3")
+            registry = generate_registry("1.2.3", "v1.2.3", root)
+        self.assertEqual(len(registry["plugins"]), len(PLUGIN_METADATA))
+        self.assertTrue(all(len(plugin["install"]["artifacts"]) == len(TARGETS) for plugin in registry["plugins"]))
+    def test_complete_registry_contains_one_release_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            self.make_archives(root, "1.2.4", ("opencode-free",))
-            existing = root / "registry.json"
-            existing.write_text(
-                __import__("json").dumps({
-                    "schema_version": 1,
-                    "plugins": [
-                        {"id": "nous-portal", "version": "1.2.3"},
-                        {"id": "nous-portal-free", "version": "1.2.3"},
-                        {"id": "opencode-free", "version": "1.2.3"},
-                        {"id": "kilo-free", "version": "1.2.3"},
-                    ],
-                }),
-                encoding="utf-8",
-            )
-            registry = generate_registry("1.2.4", "v1.2.4", root, ("opencode-free",), existing)
-        versions = {plugin["id"]: plugin["version"] for plugin in registry["plugins"]}
-        self.assertEqual(versions["opencode-free"], "1.2.4")
-        self.assertEqual(versions["nous-portal"], "1.2.3")
-
+            self.make_archives(root, "1.2.4")
+            registry = generate_registry("1.2.4", "v1.2.4", root)
+        self.assertEqual({plugin["version"] for plugin in registry["plugins"]}, {"1.2.4"})
+        artifact_urls = [
+            artifact["url"]
+            for plugin in registry["plugins"]
+            for artifact in plugin["install"]["artifacts"]
+        ]
+        self.assertTrue(all("/releases/download/v1.2.4/" in url for url in artifact_urls))
     def test_invalid_tag_version_pair_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaises(ValueError):

@@ -91,17 +91,23 @@ func freeModelAllowed(store storageJSON, modelID string) bool {
 	if modelID == "" {
 		return false
 	}
-	for _, id := range cachedFreeModelIDs(store) {
+	if cached := cachedFreeModelIDs(store); len(cached) > 0 {
+		if store.ModelCatalogAt.IsZero() || time.Since(store.ModelCatalogAt) > modelCatalogMaxAge {
+			return false
+		}
+		for _, id := range cached {
+			if id == modelID {
+				return true
+			}
+		}
+		return false
+	}
+	for _, id := range nousRefresher.Models() {
 		if id == modelID {
 			return true
 		}
 	}
-	for _, id := range fallbackModels {
-		if id == modelID {
-			return true
-		}
-	}
-	return strings.HasSuffix(strings.ToLower(modelID), ":free")
+	return false
 }
 
 // handleModelForAuth fetches the live catalog from the inference base URL and
@@ -162,13 +168,19 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		return shared.OKEnvelope(fallbackModelPayload(scope))
 	}
 
-	// Persist catalog into the auth blob for later reuse. The host merges
-	// missing identity fields from the original auth record.
+	// A successful fetch is authoritative and replaces the prior account
+	// catalog. The timestamp lets execution distinguish confirmed data from
+	// an indefinitely stale cache.
 	updated := store
 	updated.ModelCatalog, _ = json.Marshal(freeModels)
+	updated.ModelCatalogAt = time.Now().UTC()
 	storageJSON, _ := json.Marshal(updated)
 	rememberNousProbeStore(updated)
-	auth := map[string]any{"Provider": ProviderID, "StorageJSON": storageJSON}
+	auth := map[string]any{
+		"Provider":         ProviderID,
+		"StorageJSON":      storageJSON,
+		"NextRefreshAfter": nextRefreshAfter(updated.ExpiresAt),
+	}
 
 	return shared.OKEnvelope(shared.MustJSON(map[string]any{
 		"Provider":   ProviderID,

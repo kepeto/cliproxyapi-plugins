@@ -14,7 +14,6 @@ can look like a health transition.
 Examples:
   python3 scripts/check_free_models.py
   python3 scripts/check_free_models.py --all
-  python3 scripts/check_free_models.py --provider nous-portal
   python3 scripts/check_free_models.py --provider opencode-free --delay 2
   python3 scripts/check_free_models.py --watch --interval 900
   python3 scripts/check_free_models.py --watch --iterations 2 --json
@@ -34,8 +33,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
-KNOWN_PROVIDERS = ("opencode-free", "kilo-free", "nous-portal-free", "nous-portal")
-DEFAULT_PROVIDERS = KNOWN_PROVIDERS
+KNOWN_PROVIDERS = ("opencode-free", "kilo-free", "nous-portal-free")
 MESSAGE_LIMIT = 4096
 
 

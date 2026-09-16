@@ -46,13 +46,6 @@ TARGETS = (
     ("windows", "amd64", "amd64"),
 )
 PLUGIN_METADATA = {
-    "nous-portal": {
-        "name": "Nous Portal",
-        "description": "OAuth device-code authentication for Nous Portal inference API",
-        "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons/png/hermes-agent.png",
-        "homepage": "https://portal.nousresearch.com",
-        "tags": ["nous", "portal", "oauth", "inference"],
-    },
     "nous-portal-free": {
         "name": "Nous Portal Free",
         "description": "Nous Portal free models plugin for CLIProxyAPI",
@@ -111,23 +104,15 @@ def generate_registry(
     version: str,
     tag: str,
     dist: Path,
-    selected_plugins: tuple[str, ...] | None = None,
-    existing: Path | None = None,
 ) -> dict[str, object]:
     if not valid_version(version):
         raise ValueError(f"invalid release version: {version!r}")
-    if selected_plugins is None:
-        raise ValueError("one plugin must be selected")
-    if len(selected_plugins) != 1:
-        raise ValueError("exactly one plugin must be selected")
-    plugin = selected_plugins[0]
-    if plugin not in PLUGIN_METADATA:
-        raise ValueError(f"unknown plugin: {plugin!r}")
     if tag != f"v{version}":
         raise ValueError(f"release tag {tag!r} must be v{version}")
 
     expected = {
         f"{plugin}_{version}_{goos}_{asset_arch}.zip"
+        for plugin in PLUGIN_METADATA
         for goos, _, asset_arch in TARGETS
     }
     actual = {path.name for path in dist.glob("*.zip")}
@@ -136,36 +121,27 @@ def generate_registry(
         unexpected = sorted(actual - expected)
         raise ValueError(f"release artifact set mismatch: missing={missing}, unexpected={unexpected}")
 
-    metadata = PLUGIN_METADATA[plugin]
-    replacement = {
-        "id": plugin,
-        "name": metadata["name"],
-        "description": metadata["description"],
-        "author": "kepeto",
-        "version": version,
-        "repository": "https://github.com/kepeto/cliproxyapi-plugins",
-        "logo": metadata["logo"],
-        "homepage": metadata["homepage"],
-        "license": "MIT",
-        "tags": metadata["tags"],
-        "install": {
-            "type": "github-release",
-            "artifacts": archive_info(dist, plugin, version, tag),
-        },
-    }
-    if existing is None:
-        return {"schema_version": 1, "plugins": [replacement]}
-    try:
-        registry = json.loads(existing.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid existing registry: {existing}") from exc
-    if registry.get("schema_version") != 1 or not isinstance(registry.get("plugins"), list):
-        raise ValueError(f"invalid existing registry shape: {existing}")
-    plugins = {entry.get("id"): entry for entry in registry["plugins"] if isinstance(entry, dict)}
-    plugins[plugin] = replacement
-    if set(plugins) != set(PLUGIN_METADATA):
-        raise ValueError("existing registry must contain every known plugin")
-    return {"schema_version": 1, "plugins": [plugins[name] for name in PLUGIN_METADATA]}
+    plugins = []
+    for plugin, metadata in PLUGIN_METADATA.items():
+        plugins.append(
+            {
+                "id": plugin,
+                "name": metadata["name"],
+                "description": metadata["description"],
+                "author": "kepeto",
+                "version": version,
+                "repository": "https://github.com/kepeto/cliproxyapi-plugins",
+                "logo": metadata["logo"],
+                "homepage": metadata["homepage"],
+                "license": "MIT",
+                "tags": metadata["tags"],
+                "install": {
+                    "type": "github-release",
+                    "artifacts": archive_info(dist, plugin, version, tag),
+                },
+            }
+        )
+    return {"schema_version": 1, "plugins": plugins}
 
 
 def main() -> int:
@@ -174,11 +150,9 @@ def main() -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--dist", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--plugin", required=True, choices=tuple(PLUGIN_METADATA))
-    parser.add_argument("--existing", type=Path)
     args = parser.parse_args()
     try:
-        registry = generate_registry(args.version, args.tag, args.dist, (args.plugin,), args.existing)
+        registry = generate_registry(args.version, args.tag, args.dist)
     except ValueError as exc:
         parser.error(str(exc))
     args.output.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")

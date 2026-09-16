@@ -23,14 +23,27 @@ Same as `nous-portal`:
    name (e.g. `Nous Portal Free (kepeto's account)`).
 ## Model Filtering
 
-The free catalog unions two sources:
+The free catalog combines two upstream sources:
 
-- Portal `freeRecommendedModels` (same list Hermes shows; public, no auth)
-- Authenticated inference `/v1/models` filtered to free entries
+- Portal `freeRecommendedModels` (the public list used by Hermes)
+- Authenticated inference `/v1/models`, filtered to free entries
 
 Only models matching these criteria are shown:
+
 - Model ID ends with `:free`
-- OR model name contains "free" (case-insensitive)
+- OR model name contains `free` (case-insensitive)
+
+When a catalog fetch succeeds, its result replaces the previous account
+catalog. A cached account catalog records its confirmation time and is valid
+for inference for at most 24 hours. Older or undated cached catalogs are not
+used as an execution allowlist; the account must refresh its model catalog.
+
+The executor never accepts an arbitrary model merely because its ID ends with
+`:free`. Before an account-specific catalog exists, the model must be present
+in the live Portal catalog.
+
+The static fallback list is a display fallback for transient catalog
+unavailability, not proof that every fallback model is currently executable.
 
 Example free models (mirrors Hermes):
 - `upstage/solar-pro4:free`
