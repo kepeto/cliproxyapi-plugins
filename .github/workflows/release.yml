@@ -73,13 +73,7 @@ jobs:
           - `registry.json` — complete plugin store registry.
           <!-- plugin-release-assets:end -->
           NOTES
-          if [[ ! -s "$generated_notes_file" ]]; then
-            if [[ -n "$previous_tag" ]]; then
-              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$previous_tag" "${{ steps.release-vars.outputs.tag }}" > "$generated_notes_file"
-            else
-              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GITHUB_REPOSITORY" "${{ steps.release-vars.outputs.tag }}" > "$generated_notes_file"
-            fi
-          fi
+          printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GITHUB_REPOSITORY" "${{ steps.release-vars.outputs.tag }}" > "$generated_notes_file"
 
           {
             cat "$release_notes_file"
