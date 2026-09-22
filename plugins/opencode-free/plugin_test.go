@@ -619,3 +619,45 @@ func TestExecutorResponsesModelRouting(t *testing.T) {
 		t.Errorf("expected content 'OK', got %v", msg["content"])
 	}
 }
+
+func TestOpenCodeSessionRotation(t *testing.T) {
+	resetOpenCodeSession()
+	defer resetOpenCodeSession()
+
+	p1, s1 := getOpenCodeSession()
+	if p1 == "" || s1 == "" {
+		t.Fatalf("expected non-empty project and session ID")
+	}
+	if !strings.HasPrefix(s1, "ses_") {
+		t.Errorf("expected session prefix 'ses_', got %s", s1)
+	}
+
+	// Subsequent call within window must return the exact same project & session ID
+	p2, s2 := getOpenCodeSession()
+	if p1 != p2 || s1 != s2 {
+		t.Errorf("expected same session within window, got (%s, %s) vs (%s, %s)", p1, s1, p2, s2)
+	}
+
+	// Distinct request IDs
+	h1 := opencodeHeaders()
+	h2 := opencodeHeaders()
+	if h1["x-opencode-request"] == h2["x-opencode-request"] {
+		t.Errorf("expected unique request IDs, got %s", h1["x-opencode-request"])
+	}
+	if h1["x-opencode-session"] != h2["x-opencode-session"] {
+		t.Errorf("expected stable session ID in headers within window")
+	}
+
+	// Force expiration
+	sessionMu.Lock()
+	sessionExpiry = time.Now().Add(-1 * time.Second)
+	sessionMu.Unlock()
+
+	p3, s3 := getOpenCodeSession()
+	if s3 == s1 {
+		t.Errorf("expected new session after window expiry, got same %s", s3)
+	}
+	if p3 == p1 {
+		t.Errorf("expected new project after window expiry, got same %s", p3)
+	}
+}

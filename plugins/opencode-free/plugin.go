@@ -170,7 +170,8 @@ func registerPayload() string {
       {"Name": "opencode_models_url", "Type": "string", "Description": "Optional explicit models URL"},
       {"Name": "model_aliases", "Type": "object", "Description": "Client-visible model alias to upstream model ID map"},
       {"Name": "health_check", "Type": "bool", "Description": "Enable model health probes and hide models after failed checks (default false)"},
-      {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default opencode-free)"}
+      {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default opencode-free)"},
+      {"Name": "session_ttl_minutes", "Type": "int", "Description": "Session rotation window in minutes (default 45)"}
     ]
   },
   "capabilities": {

@@ -976,3 +976,102 @@ func TestRefreshNousStoreIfNeededRefreshesOnlyNearExpiry(t *testing.T) {
 		t.Fatalf("cached refresh = %#v, %v, calls=%d", got, ok, calls.Load())
 	}
 }
+
+func TestExecutorExecuteStreamDetectsIncompleteStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"halo\"},\"finish_reason\":null}]}\n\n"))
+		// Missing [DONE]
+	}))
+	defer server.Close()
+
+	cache, _ := json.Marshal([]rawCatalogModel{{ID: "tencent/hy3:free"}})
+	store := storageJSON{
+		Type:             ProviderID,
+		AccessToken:      "token",
+		InferenceBaseURL: server.URL,
+		AccountID:        "stream-account",
+		ModelCatalog:     cache,
+		ModelCatalogAt:   time.Now().UTC(),
+		ExpiresAt:        time.Now().Add(time.Hour),
+	}
+	rememberNousProbeStore(store)
+
+	req := map[string]any{
+		"AuthProvider": ProviderID,
+		"Model":        "tencent/hy3:free",
+		"Stream":       true,
+		"Payload":      []byte(`{"model":"tencent/hy3:free","messages":[{"role":"user","content":"test"}]}`),
+		"StorageJSON":  []byte(mustJSON(store)),
+	}
+	rawReq, _ := json.Marshal(req)
+	res, err := handleExecutorExecuteStream(rawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(res), "incomplete chat stream") {
+		t.Fatalf("expected incomplete chat stream error, got %s", string(res))
+	}
+}
+
+func TestExecutorExecuteStreamSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data:{\"choices\":[{\"delta\":{\"content\":\"halo\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	cache, _ := json.Marshal([]rawCatalogModel{{ID: "tencent/hy3:free"}})
+	store := storageJSON{
+		Type:             ProviderID,
+		AccessToken:      "token",
+		InferenceBaseURL: server.URL,
+		AccountID:        "stream-account-2",
+		ModelCatalog:     cache,
+		ModelCatalogAt:   time.Now().UTC(),
+		ExpiresAt:        time.Now().Add(time.Hour),
+	}
+	rememberNousProbeStore(store)
+
+	req := map[string]any{
+		"AuthProvider": ProviderID,
+		"Model":        "tencent/hy3:free",
+		"Stream":       true,
+		"Payload":      []byte(`{"model":"tencent/hy3:free","messages":[{"role":"user","content":"test"}]}`),
+		"StorageJSON":  []byte(mustJSON(store)),
+	}
+	rawReq, _ := json.Marshal(req)
+	res, err := handleExecutorExecuteStream(rawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(res), `"Chunks"`) {
+		t.Fatalf("expected chunks in stream response, got %s", string(res))
+	}
+}
+func TestExecuteNousChatWithRetry(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	body, status, _, err := executeNousChatWithRetry(server.URL+"/chat/completions", "test", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts.Load())
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Fatalf("expected response body with 'ok', got %s", string(body))
+	}
+}

@@ -55,7 +55,7 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
-	body, status, headers, err := shared.DoChatRequest(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
+	body, status, headers, err := executeNousChatWithRetry(url, store.AccessToken, shared.InjectNousPortalTags(resolveModelFromPayload(req.Payload)))
 	if err != nil {
 		recordInferenceFailure(scope, modelID, status, body, err)
 		return errorEnvelope("executor_execute_failed", err.Error()), nil
@@ -106,7 +106,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	}
 
 	url := shared.TrimHTTP(store.InferenceBaseURL) + "/chat/completions"
-	reader, status, headers, err := shared.DoChatStream(url, store.AccessToken, shared.InjectNousPortalTags(resolveStreamPayload(req.Payload)))
+	reader, status, headers, err := executeNousChatStreamWithRetry(url, store.AccessToken, shared.InjectNousPortalTags(resolveStreamPayload(req.Payload)))
 	if err != nil {
 		recordInferenceFailure(scope, modelID, status, nil, err)
 		return errorEnvelope("executor_stream_failed", err.Error()), nil
@@ -127,8 +127,9 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	)
 	chunks := make([]map[string]any, 0)
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	var totalBytes int
+	var sawEvent, sawDone bool
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
@@ -139,14 +140,31 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		if line == "" || line[0] == ':' {
 			continue
 		}
-		line = strings.TrimPrefix(line, "data: ")
-		totalBytes += len(line) + 1
+		trimmed := strings.TrimPrefix(line, "data:")
+		trimmed = strings.TrimPrefix(trimmed, " ")
+		totalBytes += len(trimmed) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
 			nousRecordProbeFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
-		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
+		switch {
+		case trimmed == "[DONE]":
+			sawDone = true
+		default:
+			var event map[string]any
+			if json.Unmarshal([]byte(trimmed), &event) == nil {
+				if choices, ok := event["choices"].([]any); ok && len(choices) > 0 {
+					sawEvent = true
+					if choiceMap, ok := choices[0].(map[string]any); ok {
+						if fr, ok := choiceMap["finish_reason"].(string); ok && fr != "" {
+							sawDone = true
+						}
+					}
+				}
+			}
+		}
+		chunks = append(chunks, map[string]any{"Payload": []byte(trimmed + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
@@ -158,11 +176,60 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		nousRecordProbeFailure(scope, modelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
+	if !sawEvent || !sawDone {
+		nousRecordProbeFailure(scope, modelID)
+		return errorEnvelope("executor_stream_failed", "incomplete chat stream: missing completion event or finish reason"), nil
+	}
 	nousRecordSuccess(scope, modelID)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Headers": shared.HeaderMap(headers),
 		"Chunks":  chunks,
 	}))
+}
+
+// executeNousChatWithRetry retries on transient 502/503/504 errors.
+func executeNousChatWithRetry(url, apiKey string, payload []byte) ([]byte, int, http.Header, error) {
+	const maxAttempts = 3
+	backoff := time.Second
+	var status int
+	var body []byte
+	var headers http.Header
+	var err error
+	for attempt := range maxAttempts {
+		body, status, headers, err = shared.DoChatRequest(url, apiKey, payload)
+		if err == nil && (status < http.StatusBadGateway || status > http.StatusGatewayTimeout) {
+			return body, status, headers, nil
+		}
+		if attempt+1 < maxAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return body, status, headers, err
+}
+
+// executeNousChatStreamWithRetry retries stream connection on transient 502/503/504 errors.
+func executeNousChatStreamWithRetry(url, apiKey string, payload []byte) (io.ReadCloser, int, http.Header, error) {
+	const maxAttempts = 3
+	backoff := time.Second
+	var reader io.ReadCloser
+	var status int
+	var headers http.Header
+	var err error
+	for attempt := range maxAttempts {
+		reader, status, headers, err = shared.DoChatStream(url, apiKey, payload)
+		if err == nil && (status < http.StatusBadGateway || status > http.StatusGatewayTimeout) {
+			return reader, status, headers, nil
+		}
+		if reader != nil {
+			_ = reader.Close()
+		}
+		if attempt+1 < maxAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return reader, status, headers, err
 }
 
 // handleExecutorHTTPRequest bridges a raw HTTP request from the host through to the inference API.

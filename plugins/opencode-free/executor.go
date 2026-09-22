@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,7 +30,21 @@ func recordInferenceFailure(scope, model string, status int, body []byte, err er
 }
 
 var streamTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   20,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
 	ResponseHeaderTimeout: 180 * time.Second,
+	TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	},
 }
 
 func handleExecutorIdentifier() ([]byte, error) {
@@ -389,7 +405,7 @@ func executeOpenCodeChatWithRetry(payload []byte, baseModelID string, stream boo
 	var err error
 	for attempt := range maxAttempts {
 		status, body, err = executeOpenCodeChat(payload, baseModelID, stream)
-		if err != nil || status < 500 || status > 503 {
+		if err != nil || status < http.StatusBadGateway || status > http.StatusGatewayTimeout {
 			return status, body, err
 		}
 		if attempt+1 < maxAttempts {
@@ -400,7 +416,7 @@ func executeOpenCodeChatWithRetry(payload []byte, baseModelID string, stream boo
 	return status, body, nil
 }
 
-// executeOpenCodeChatStreamWithRetry retries stream on transient 502/503 errors.
+// executeOpenCodeChatStreamWithRetry retries stream on transient 502/503/504 errors.
 func executeOpenCodeChatStreamWithRetry(payload []byte, baseModelID string) (io.ReadCloser, int, error) {
 	const maxAttempts = 3
 	backoff := time.Second
@@ -409,7 +425,7 @@ func executeOpenCodeChatStreamWithRetry(payload []byte, baseModelID string) (io.
 	var err error
 	for attempt := range maxAttempts {
 		reader, status, err = executeOpenCodeChatStream(payload, baseModelID)
-		if err != nil || status < 500 || status > 503 {
+		if err != nil || status < http.StatusBadGateway || status > http.StatusGatewayTimeout {
 			return reader, status, err
 		}
 		_ = reader.Close()

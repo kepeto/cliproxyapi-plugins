@@ -137,20 +137,55 @@ func fetchOpenCodeMetadata() (map[string]openCodeModelMetadata, error) {
 	return result, nil
 }
 
+var (
+	sessionMu         sync.Mutex
+	activeProjectID   string
+	activeSessionID   string
+	sessionExpiry     time.Time
+	sessionTTLMinutes = 45
+)
+
+// getOpenCodeSession returns a stable project & session ID within the configured time window.
+func getOpenCodeSession() (string, string) {
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	now := time.Now()
+	ttl := time.Duration(sessionTTLMinutes) * time.Minute
+	if ttl <= 0 {
+		ttl = 45 * time.Minute
+	}
+	if activeProjectID == "" || activeSessionID == "" || now.After(sessionExpiry) {
+		activeProjectID = newOpenCodeProjectID()
+		activeSessionID = newOpenCodeSessionID()
+		sessionExpiry = now.Add(ttl)
+	}
+	return activeProjectID, activeSessionID
+}
+
+// resetOpenCodeSession clears the current session window to force a new session on next request.
+func resetOpenCodeSession() {
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	activeProjectID = ""
+	activeSessionID = ""
+	sessionExpiry = time.Time{}
+}
+
 // opencodeHeaders returns the headers needed for OpenCode Zen requests.
 func opencodeHeaders() map[string]string {
+	projectID, sessionID := getOpenCodeSession()
 	return map[string]string{
 		"User-Agent":         "opencode/1.18.32",
 		"x-opencode-client":  "cli",
-		"x-opencode-project": newOpenCodeProjectID(),
-		"x-opencode-session": newOpenCodeSessionID(),
+		"x-opencode-project": projectID,
+		"x-opencode-session": sessionID,
 		"x-opencode-request": newOpenCodeRequestID(),
 		"Accept":             "application/json",
 		"Content-Type":       "application/json",
 	}
 }
 
-var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
+var httpClient = &http.Client{Transport: streamTransport, Timeout: HTTP_TIMEOUT}
 
 var (
 	endpointMu        sync.RWMutex
@@ -310,12 +345,13 @@ func probeOpenCodeModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome
 
 // config holds plugin-level overrides resolved from plugins.configs.opencode-free.
 type config struct {
-	BaseURL      string            `json:"opencode_base_url"`
-	ChatURL      string            `json:"opencode_chat_url"`
-	ModelsURL    string            `json:"opencode_models_url"`
-	ModelAliases map[string]string `json:"model_aliases"`
-	Prefix       string            `json:"prefix"`
-	HealthCheck  bool              `json:"health_check"`
+	BaseURL           string            `json:"opencode_base_url"`
+	ChatURL           string            `json:"opencode_chat_url"`
+	ModelsURL         string            `json:"opencode_models_url"`
+	ModelAliases      map[string]string `json:"model_aliases"`
+	Prefix            string            `json:"prefix"`
+	HealthCheck       bool              `json:"health_check"`
+	SessionTTLMinutes int               `json:"session_ttl_minutes"`
 }
 
 func (c config) prefix() string {
@@ -340,6 +376,11 @@ func applyConfig(raw []byte) {
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
 	setOpencodeHealthChecksEnabled(cfg.HealthCheck)
+	if cfg.SessionTTLMinutes > 0 {
+		sessionMu.Lock()
+		sessionTTLMinutes = cfg.SessionTTLMinutes
+		sessionMu.Unlock()
+	}
 
 	chatURL, modelsURL := cfg.endpoints()
 	endpointMu.Lock()

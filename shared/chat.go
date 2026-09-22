@@ -2,16 +2,32 @@ package shared
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
 
 var streamTransport = &http.Transport{
-	ResponseHeaderTimeout: 30 * time.Second,
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   20,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+	ResponseHeaderTimeout: 180 * time.Second,
+	TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	},
 }
 
 // InjectNousPortalTags ensures the upstream Nous Portal request carries the
@@ -46,7 +62,7 @@ func DoChatRequest(url, apiKey string, payload []byte) ([]byte, int, http.Header
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "hermes-cli/0.20.1")
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Transport: streamTransport, Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, nil, err

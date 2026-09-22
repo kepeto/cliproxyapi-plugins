@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,7 +30,21 @@ func recordInferenceFailure(scope, model string, status int, body []byte, err er
 }
 
 var streamTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   20,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
 	ResponseHeaderTimeout: 180 * time.Second,
+	TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	},
 }
 
 func handleExecutorIdentifier() ([]byte, error) {
@@ -137,8 +153,9 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	)
 	chunks := make([]map[string]any, 0)
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	var totalBytes int
+	var sawEvent, sawDone bool
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
@@ -149,14 +166,26 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		if line == "" || line[0] == ':' {
 			continue
 		}
-		line = strings.TrimPrefix(line, "data: ")
-		totalBytes += len(line) + 1
+		trimmed := strings.TrimPrefix(line, "data:")
+		trimmed = strings.TrimPrefix(trimmed, " ")
+		totalBytes += len(trimmed) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
 			kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
-		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
+		switch {
+		case trimmed == "[DONE]":
+			sawDone = true
+		default:
+			var event map[string]any
+			if json.Unmarshal([]byte(trimmed), &event) == nil {
+				if _, ok := event["choices"]; ok {
+					sawEvent = true
+				}
+			}
+		}
+		chunks = append(chunks, map[string]any{"Payload": []byte(trimmed + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
@@ -167,6 +196,10 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	if len(chunks) == 0 {
 		kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
+	}
+	if !sawEvent || !sawDone {
+		kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
+		return errorEnvelope("executor_stream_failed", "incomplete chat stream: missing completion event or [DONE]"), nil
 	}
 	kiloRecordSuccess(kiloHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{
@@ -186,10 +219,7 @@ func executeKiloChat(payload []byte, stream bool) (int, []byte, error) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := httpClient
-	if stream {
-		client = &http.Client{Timeout: 0}
-	}
+	client := &http.Client{Transport: streamTransport, Timeout: HTTP_TIMEOUT}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -307,7 +337,7 @@ func executeKiloChatStreamWithRetry(payload []byte) (io.ReadCloser, int, error) 
 	var err error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		reader, status, err = executeKiloChatStream(payload)
-		if err == nil && (status < http.StatusBadGateway || status > http.StatusServiceUnavailable) {
+		if err == nil && (status < http.StatusBadGateway || status > http.StatusGatewayTimeout) {
 			return reader, status, nil
 		}
 		if reader != nil {
@@ -329,7 +359,7 @@ func executeKiloChatWithRetry(payload []byte) (int, []byte, error) {
 	var err error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		status, body, err = executeKiloChat(payload, false)
-		if err == nil && (status < http.StatusBadGateway || status > http.StatusServiceUnavailable) {
+		if err == nil && (status < http.StatusBadGateway || status > http.StatusGatewayTimeout) {
 			return status, body, nil
 		}
 		if attempt+1 < maxAttempts {

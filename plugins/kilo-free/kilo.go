@@ -78,7 +78,7 @@ func kiloHeaders() map[string]string {
 	}
 }
 
-var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
+var httpClient = &http.Client{Transport: streamTransport, Timeout: HTTP_TIMEOUT}
 
 // config holds plugin-level overrides resolved from plugins.configs.kilo-free.
 type config struct {

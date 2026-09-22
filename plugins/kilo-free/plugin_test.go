@@ -232,7 +232,7 @@ func TestExecutorStreamForcesSSE(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		streamValue, _ = payload["stream"].(bool)
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"test\"}}]}\n\ndata: [DONE]\n\n"))
 	}))
 	defer server.Close()
 	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
@@ -498,5 +498,69 @@ func TestExecutorRefreshMissKeepsModelNotFoundOnRefreshFailure(t *testing.T) {
 	response, _ := handleExecutorExecute([]byte(`{"Model":"missing-free","Messages":[]}`))
 	if !strings.Contains(string(response), `"model_refresh_failed"`) {
 		t.Fatalf("refresh failure returned unexpected response: %s", response)
+	}
+}
+func TestKiloExecutorStreamDetectsIncompleteStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"halo\"}}]}\n\n"))
+		// Missing [DONE]
+	}))
+	defer server.Close()
+
+	originalChatURL := kiloChatURL
+	kiloChatURL = server.URL + "/v1/chat/completions"
+	defer func() { kiloChatURL = originalChatURL }()
+
+	originalRefresher := kiloRefresher
+	defer func() { kiloRefresher = originalRefresher }()
+	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"test-free"}, nil
+	}, nil)
+	_ = kiloRefresher.Refresh()
+
+	req := map[string]any{
+		"Model":  "test-free",
+		"Stream": true,
+	}
+	rawReq, _ := json.Marshal(req)
+	res, err := handleExecutorExecuteStream(rawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(res), "incomplete chat stream") {
+		t.Fatalf("expected incomplete chat stream error, got %s", string(res))
+	}
+}
+
+func TestKiloExecutorStreamSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data:{\"choices\":[{\"delta\":{\"content\":\"halo\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	originalChatURL := kiloChatURL
+	kiloChatURL = server.URL + "/v1/chat/completions"
+	defer func() { kiloChatURL = originalChatURL }()
+
+	originalRefresher := kiloRefresher
+	defer func() { kiloRefresher = originalRefresher }()
+	kiloRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"test-free"}, nil
+	}, nil)
+	_ = kiloRefresher.Refresh()
+
+	req := map[string]any{
+		"Model":  "test-free",
+		"Stream": true,
+	}
+	rawReq, _ := json.Marshal(req)
+	res, err := handleExecutorExecuteStream(rawReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(res), `"Chunks"`) {
+		t.Fatalf("expected chunks in stream response, got %s", string(res))
 	}
 }
