@@ -121,6 +121,14 @@ func (h *ModelHealth) ResetScope(scope string) {
 	delete(h.recentFailures, scope)
 }
 
+// Reset clears all model health state.
+func (h *ModelHealth) Reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.states = make(map[string]modelHealthState)
+	h.recentFailures = make(map[string]map[string]time.Time)
+}
+
 // RecordProbeSuccess clears probe state and makes the model visible again.
 func (h *ModelHealth) RecordProbeSuccess(scope, model string) {
 	h.RecordSuccess(scope, model)

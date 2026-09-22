@@ -19,16 +19,16 @@ func recordInferenceFailure(scope, model string, status int, body []byte, err er
 		return
 	}
 	if err != nil || status == 408 || status == 429 || status >= 500 {
-		modelHealth.RecordProbeFailure(scope, model)
+		opencodeRecordProbeFailure(openCodeHealthScope(), model)
 		return
 	}
 	if shared.IsModelSpecificFailure(status, body, nil) {
-		modelHealth.RecordFailure(scope, model)
+		opencodeRecordFailure(openCodeHealthScope(), model)
 	}
 }
 
 var streamTransport = &http.Transport{
-	ResponseHeaderTimeout: 30 * time.Second,
+	ResponseHeaderTimeout: 180 * time.Second,
 }
 
 func handleExecutorIdentifier() ([]byte, error) {
@@ -53,7 +53,7 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 	if baseModelID != "" && !opencodeRefresher.Contains(baseModelID) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
-	if !modelHealth.Allow(openCodeHealthScope(), baseModelID) {
+	if !opencodeModelAllowed(openCodeHealthScope(), baseModelID) {
 		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
 	}
 
@@ -63,7 +63,7 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("invalid_request", "marshal error"), nil
 	}
 
-	status, body, err := executeOpenCodeChatWithRetry(payload, false)
+	status, body, err := executeOpenCodeChatWithRetry(payload, baseModelID, false)
 	if err != nil {
 		recordInferenceFailure(openCodeHealthScope(), baseModelID, status, body, err)
 		return errorEnvelope("upstream_error", err.Error()), nil
@@ -74,10 +74,10 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
 	if !shared.ValidChatResponse(body) {
-		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+		opencodeRecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("upstream_error", "invalid or empty chat response"), nil
 	}
-	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
+	opencodeRecordSuccess(openCodeHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]interface{}{
 		"Payload": base64encode(body),
 		"Headers": map[string][]string{
@@ -104,7 +104,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	if baseModelID != "" && !opencodeRefresher.Contains(baseModelID) {
 		return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 	}
-	if !modelHealth.Allow(openCodeHealthScope(), baseModelID) {
+	if !opencodeModelAllowed(openCodeHealthScope(), baseModelID) {
 		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
 	}
 
@@ -115,7 +115,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("invalid_request", "marshal error"), nil
 	}
 
-	reader, status, err := executeOpenCodeChatStreamWithRetry(payload)
+	reader, status, err := executeOpenCodeChatStreamWithRetry(payload, baseModelID)
 	if err != nil {
 		recordInferenceFailure(openCodeHealthScope(), baseModelID, status, nil, err)
 		return errorEnvelope("upstream_error", err.Error()), nil
@@ -142,7 +142,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
-			modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+			opencodeRecordProbeFailure(openCodeHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -153,7 +153,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
-			modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+			opencodeRecordProbeFailure(openCodeHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		switch {
@@ -171,19 +171,19 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
-		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+		opencodeRecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
-		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+		opencodeRecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
 	if !sawEvent || !sawDone {
-		modelHealth.RecordProbeFailure(openCodeHealthScope(), baseModelID)
+		opencodeRecordProbeFailure(openCodeHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "incomplete chat stream: missing completion event or [DONE]"), nil
 	}
-	modelHealth.RecordSuccess(openCodeHealthScope(), baseModelID)
+	opencodeRecordSuccess(openCodeHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{
 		"Headers": map[string]any{
 			"content-type": []string{"text/event-stream"},
@@ -278,50 +278,88 @@ func handleExecutorCountTokens(rawReq []byte) ([]byte, error) {
 	}))
 }
 
-// executeOpenCodeChat sends a chat completion request to OpenCode
-
-func executeOpenCodeChat(payload []byte, stream bool) (int, []byte, error) {
-	req, err := http.NewRequest(http.MethodPost, currentOpenCodeChatURL(), bytes.NewReader(payload))
+// executeOpenCodeChat sends a chat completion or responses request to OpenCode
+func executeOpenCodeChat(payload []byte, baseModelID string, stream bool) (int, []byte, error) {
+	reqPayload := prepareOpenCodePayload(payload, baseModelID)
+	url := currentOpenCodeChatURL()
+	if isOpenCodeResponsesModel(baseModelID) {
+		url = currentOpenCodeResponsesURL()
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqPayload))
 	if err != nil {
 		return 0, nil, err
 	}
 	for k, v := range opencodeHeaders() {
 		req.Header.Set(k, v)
 	}
-	if stream {
-		req.Header.Set("Accept", "text/event-stream")
-	}
+	req.Header.Set("Accept", "text/event-stream, application/json")
 	req.Header.Set("Authorization", "Bearer public")
 	req.Header.Set("Content-Type", "application/json")
 
-	client := httpClient
-	if stream {
-		client = &http.Client{Transport: streamTransport, Timeout: HTTP_TIMEOUT}
-	}
-
+	client := &http.Client{Transport: streamTransport, Timeout: HTTP_TIMEOUT}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return resp.StatusCode, body, nil
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "text/event-stream") {
+		var assembled []byte
+		if isOpenCodeResponsesModel(baseModelID) {
+			converted := convertResponsesSSEToOpenAISSE(resp.Body, baseModelID)
+			defer converted.Close()
+			assembled, err = assembleChatCompletionFromSSE(converted, baseModelID)
+		} else {
+			assembled, err = assembleChatCompletionFromSSE(resp.Body, baseModelID)
+		}
+		if err != nil {
+			return http.StatusInternalServerError, nil, fmt.Errorf("failed to assemble chat completion from sse: %w", err)
+		}
+		return http.StatusOK, assembled, nil
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
 
+	trimmed := bytes.TrimSpace(body)
+	if bytes.HasPrefix(trimmed, []byte("data: ")) {
+		var assembled []byte
+		if isOpenCodeResponsesModel(baseModelID) {
+			converted := convertResponsesSSEToOpenAISSE(io.NopCloser(bytes.NewReader(body)), baseModelID)
+			defer converted.Close()
+			assembled, err = assembleChatCompletionFromSSE(converted, baseModelID)
+		} else {
+			assembled, err = assembleChatCompletionFromSSE(bytes.NewReader(body), baseModelID)
+		}
+		if err != nil {
+			return http.StatusInternalServerError, nil, fmt.Errorf("failed to assemble chat completion from sse: %w", err)
+		}
+		return http.StatusOK, assembled, nil
+	}
+
 	return resp.StatusCode, body, nil
 }
 
-func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
-	req, err := http.NewRequest(http.MethodPost, currentOpenCodeChatURL(), bytes.NewReader(payload))
+func executeOpenCodeChatStream(payload []byte, baseModelID string) (io.ReadCloser, int, error) {
+	reqPayload := prepareOpenCodePayload(payload, baseModelID)
+	url := currentOpenCodeChatURL()
+	if isOpenCodeResponsesModel(baseModelID) {
+		url = currentOpenCodeResponsesURL()
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(reqPayload))
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// Set OpenCode headers
-	headers := opencodeHeaders()
-	for k, v := range headers {
+	for k, v := range opencodeHeaders() {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Accept", "text/event-stream")
@@ -333,18 +371,24 @@ func executeOpenCodeChatStream(payload []byte) (io.ReadCloser, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		return resp.Body, resp.StatusCode, nil
+	}
+	if isOpenCodeResponsesModel(baseModelID) {
+		return convertResponsesSSEToOpenAISSE(resp.Body, baseModelID), http.StatusOK, nil
+	}
 	return resp.Body, resp.StatusCode, nil
 }
 
 // executeOpenCodeChatWithRetry retries on transient 502/503 errors.
-func executeOpenCodeChatWithRetry(payload []byte, stream bool) (int, []byte, error) {
+func executeOpenCodeChatWithRetry(payload []byte, baseModelID string, stream bool) (int, []byte, error) {
 	const maxAttempts = 3
 	backoff := time.Second
 	var status int
 	var body []byte
 	var err error
 	for attempt := range maxAttempts {
-		status, body, err = executeOpenCodeChat(payload, stream)
+		status, body, err = executeOpenCodeChat(payload, baseModelID, stream)
 		if err != nil || status < 500 || status > 503 {
 			return status, body, err
 		}
@@ -357,14 +401,14 @@ func executeOpenCodeChatWithRetry(payload []byte, stream bool) (int, []byte, err
 }
 
 // executeOpenCodeChatStreamWithRetry retries stream on transient 502/503 errors.
-func executeOpenCodeChatStreamWithRetry(payload []byte) (io.ReadCloser, int, error) {
+func executeOpenCodeChatStreamWithRetry(payload []byte, baseModelID string) (io.ReadCloser, int, error) {
 	const maxAttempts = 3
 	backoff := time.Second
 	var reader io.ReadCloser
 	var status int
 	var err error
 	for attempt := range maxAttempts {
-		reader, status, err = executeOpenCodeChatStream(payload)
+		reader, status, err = executeOpenCodeChatStream(payload, baseModelID)
 		if err != nil || status < 500 || status > 503 {
 			return reader, status, err
 		}

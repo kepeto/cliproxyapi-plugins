@@ -209,6 +209,7 @@ func registerPayload() string {
       {"Name": "client_id", "Type": "string", "Description": "OAuth client id (default hermes-cli)"},
       {"Name": "scope", "Type": "string", "Description": "OAuth scope (default inference:invoke)"},
       {"Name": "model_aliases", "Type": "object", "Description": "Client-visible model alias to upstream model ID map"},
+      {"Name": "health_check", "Type": "bool", "Description": "Enable model health probes and hide models after failed checks (default false)"},
       {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default nous-portal-free)"}
     ]
   },

@@ -84,6 +84,7 @@ plugins:
       scope: "inference:invoke"
       model_aliases:
         free-model: "minimax/minimax-m2.5:free"
+      health_check: false
 ```
 
 Config values are bare upstream IDs. The client-facing alias is prefixed, for
@@ -99,11 +100,12 @@ Models use the prefix `nous-portal-free/`:
 
 ## Runtime Guarantees
 
-Health probes run every 15 minutes for known authenticated models. A failed
-probe or limit/server/timeout/invalid response hides that model immediately; a
-successful later probe restores it. Normal model-specific 4xx failures use the
-three-failure threshold. SSE is buffered with 100,000-chunk, 100 MiB total, and
-1 MiB line limits.
+Model health checking is disabled by default. Set `health_check: true` to run
+probes every 15 minutes and hide a model after a failed probe or limit/server/
+timeout/invalid response; a successful later probe restores it. When disabled,
+model health never removes models from the dashboard list. Normal model-specific
+4xx failures use the three-failure threshold when health checking is enabled. SSE
+is buffered with 100,000-chunk, 100 MiB total, and 1 MiB line limits.
 Expired access tokens remain parseable so CPA can invoke `auth.refresh`; refresh
 requests are serialized per account. A new login is required only when the
 refresh token is rejected or revoked.

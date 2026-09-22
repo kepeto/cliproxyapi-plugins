@@ -222,8 +222,12 @@ func TestExecutorStreamForcesSSE(t *testing.T) {
 	}()
 	var streamValue bool
 	var accept string
+	var userAgent string
+	var editorName string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		accept = r.Header.Get("Accept")
+		userAgent = r.Header.Get("User-Agent")
+		editorName = r.Header.Get("X-KILOCODE-EDITORNAME")
 		var payload map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		streamValue, _ = payload["stream"].(bool)
@@ -237,10 +241,12 @@ func TestExecutorStreamForcesSSE(t *testing.T) {
 	endpointMu.Lock()
 	kiloChatURL = server.URL
 	endpointMu.Unlock()
-
 	response, _ := handleExecutorExecuteStream([]byte(`{"Model":"example-free","Messages":[]}`))
 	if !strings.Contains(string(response), `"Chunks"`) || accept != "text/event-stream" || !streamValue {
 		t.Fatalf("stream request not normalized: response=%s accept=%q stream=%v", response, accept, streamValue)
+	}
+	if userAgent != "opencode-kilo-provider" || editorName != "Kilo CLI" {
+		t.Fatalf("Kilo headers missing: User-Agent=%q editor=%q", userAgent, editorName)
 	}
 }
 
@@ -260,6 +266,8 @@ func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
 }
 
 func TestModelStaticHidesAndRestoresProbeFailure(t *testing.T) {
+	setKiloHealthChecksEnabled(true)
+	defer setKiloHealthChecksEnabled(false)
 	originalRefresher := kiloRefresher
 	defer func() { kiloRefresher = originalRefresher }()
 	model := "probe-failure-free"
@@ -294,6 +302,8 @@ func TestModelStaticHidesAndRestoresProbeFailure(t *testing.T) {
 }
 
 func TestSmokeFailureHidesAndProbeRestoresModel(t *testing.T) {
+	setKiloHealthChecksEnabled(true)
+	defer setKiloHealthChecksEnabled(false)
 	originalRefresher := kiloRefresher
 	originalChatURL := currentKiloChatURL()
 	defer func() {

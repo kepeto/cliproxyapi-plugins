@@ -19,16 +19,16 @@ func recordInferenceFailure(scope, model string, status int, body []byte, err er
 		return
 	}
 	if err != nil || status == 408 || status == 429 || status >= 500 {
-		modelHealth.RecordProbeFailure(scope, model)
+		kiloRecordProbeFailure(scope, model)
 		return
 	}
 	if shared.IsModelSpecificFailure(status, body, nil) {
-		modelHealth.RecordFailure(scope, model)
+		kiloRecordFailure(scope, model)
 	}
 }
 
 var streamTransport = &http.Transport{
-	ResponseHeaderTimeout: 30 * time.Second,
+	ResponseHeaderTimeout: 180 * time.Second,
 }
 
 func handleExecutorIdentifier() ([]byte, error) {
@@ -55,7 +55,7 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 			return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 		}
 	}
-	if !modelHealth.Allow(kiloHealthScope(), baseModelID) {
+	if !kiloModelAllowed(kiloHealthScope(), baseModelID) {
 		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
 	}
 
@@ -65,7 +65,7 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("invalid_request", "marshal error"), nil
 	}
 
-	status, body, err := executeKiloChat(payload, false)
+	status, body, err := executeKiloChatWithRetry(payload)
 	if err != nil {
 		recordInferenceFailure(kiloHealthScope(), baseModelID, status, body, err)
 		return errorEnvelope("upstream_error", err.Error()), nil
@@ -76,10 +76,10 @@ func handleExecutorExecute(rawReq []byte) ([]byte, error) {
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
 	if !shared.ValidChatResponse(body) {
-		modelHealth.RecordProbeFailure(kiloHealthScope(), baseModelID)
+		kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 		return errorEnvelope("upstream_error", "invalid or empty chat response"), nil
 	}
-	modelHealth.RecordSuccess(kiloHealthScope(), baseModelID)
+	kiloRecordSuccess(kiloHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]interface{}{
 		"Payload": base64encode(body),
 		"Headers": map[string][]string{"content-type": {"application/json"}},
@@ -105,7 +105,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 			return errorEnvelope("model_not_found", fmt.Sprintf("model %q not found", modelID)), nil
 		}
 	}
-	if !modelHealth.Allow(kiloHealthScope(), baseModelID) {
+	if !kiloModelAllowed(kiloHealthScope(), baseModelID) {
 		return errorEnvelope("model_quarantined", fmt.Sprintf("model %q is temporarily unavailable", modelID)), nil
 	}
 
@@ -116,7 +116,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("invalid_request", "marshal error"), nil
 	}
 
-	reader, status, err := executeKiloChatStream(payload)
+	reader, status, err := executeKiloChatStreamWithRetry(payload)
 	if err != nil {
 		recordInferenceFailure(kiloHealthScope(), baseModelID, status, nil, err)
 		return errorEnvelope("upstream_error", err.Error()), nil
@@ -142,7 +142,7 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
-			modelHealth.RecordProbeFailure(kiloHealthScope(), baseModelID)
+			kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -153,22 +153,22 @@ func handleExecutorExecuteStream(rawReq []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
-			modelHealth.RecordProbeFailure(kiloHealthScope(), baseModelID)
+			kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
-		modelHealth.RecordProbeFailure(kiloHealthScope(), baseModelID)
+		kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
-		modelHealth.RecordProbeFailure(kiloHealthScope(), baseModelID)
+		kiloRecordProbeFailure(kiloHealthScope(), baseModelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
-	modelHealth.RecordSuccess(kiloHealthScope(), baseModelID)
+	kiloRecordSuccess(kiloHealthScope(), baseModelID)
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{
 		"Headers": map[string]any{
 			"content-type": []string{"text/event-stream"},
@@ -297,4 +297,45 @@ func handleExecutorCountTokens(rawReq []byte) ([]byte, error) {
 		n = 1
 	}
 	return okEnvelopeJSON(shared.MustJSON(map[string]any{"Count": n}))
+}
+
+func executeKiloChatStreamWithRetry(payload []byte) (io.ReadCloser, int, error) {
+	const maxAttempts = 3
+	backoff := time.Second
+	var reader io.ReadCloser
+	var status int
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		reader, status, err = executeKiloChatStream(payload)
+		if err == nil && (status < http.StatusBadGateway || status > http.StatusServiceUnavailable) {
+			return reader, status, nil
+		}
+		if reader != nil {
+			_ = reader.Close()
+		}
+		if attempt+1 < maxAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return reader, status, err
+}
+
+func executeKiloChatWithRetry(payload []byte) (int, []byte, error) {
+	const maxAttempts = 3
+	backoff := time.Second
+	var status int
+	var body []byte
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		status, body, err = executeKiloChat(payload, false)
+		if err == nil && (status < http.StatusBadGateway || status > http.StatusServiceUnavailable) {
+			return status, body, nil
+		}
+		if attempt+1 < maxAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return status, body, err
 }

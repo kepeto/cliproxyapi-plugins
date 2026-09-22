@@ -45,12 +45,12 @@ func modelPayloadForIDs(scope string, ids []string) string {
 	allowed := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		allowed[id] = struct{}{}
-		if !modelHealth.Hidden(scope, id) {
+		if !nousModelHidden(scope, id) {
 			models = append(models, modelInfo(prefixedModelID(id), id))
 		}
 	}
 	for alias, target := range modelAliases.Entries() {
-		if _, ok := allowed[target]; !ok || modelHealth.Hidden(scope, target) {
+		if _, ok := allowed[target]; !ok || nousModelHidden(scope, target) {
 			continue
 		}
 		models = append(models, modelInfo(prefixedModelID(alias), alias))
@@ -151,12 +151,12 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	models := make([]map[string]any, 0, len(freeModels))
 	for _, m := range freeModels {
 		allowed[m.ID] = struct{}{}
-		if !modelHealth.Hidden(scope, m.ID) {
+		if !nousModelHidden(scope, m.ID) {
 			models = append(models, modelInfo(prefixedModelID(m.ID), m.ID))
 		}
 	}
 	for alias, target := range modelAliases.Entries() {
-		if _, ok := allowed[target]; !ok || modelHealth.Hidden(scope, target) {
+		if _, ok := allowed[target]; !ok || nousModelHidden(scope, target) {
 			continue
 		}
 		models = append(models, modelInfo(prefixedModelID(alias), alias))

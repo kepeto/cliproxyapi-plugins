@@ -23,11 +23,11 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 	}
 
 	models := make([]map[string]interface{}, 0)
-	for _, id := range modelHealth.Filter(kiloHealthScope(), kiloRefresher.Models()) {
+	for _, id := range kiloVisibleModels(kiloHealthScope(), kiloRefresher.Models()) {
 		models = append(models, modelEntry(id))
 	}
 	for alias, target := range modelAliases.Entries() {
-		if !modelHealth.Hidden(kiloHealthScope(), target) {
+		if !kiloModelHidden(kiloHealthScope(), target) {
 			models = append(models, modelEntry(alias))
 		}
 	}
@@ -101,7 +101,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 
 	models := make([]map[string]interface{}, 0)
 	catalogEntries := make([]map[string]interface{}, 0)
-	for _, id := range modelHealth.Filter(kiloHealthScope(), kiloRefresher.Models()) {
+	for _, id := range kiloVisibleModels(kiloHealthScope(), kiloRefresher.Models()) {
 		models = append(models, modelEntry(id))
 		catalogEntries = append(catalogEntries, map[string]interface{}{
 			"id":   id,
@@ -109,7 +109,7 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 		})
 	}
 	for alias, target := range modelAliases.Entries() {
-		if !modelHealth.Hidden(kiloHealthScope(), target) {
+		if !kiloModelHidden(kiloHealthScope(), target) {
 			models = append(models, modelEntryFor(alias, target))
 		}
 	}

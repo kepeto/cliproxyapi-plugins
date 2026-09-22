@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
@@ -21,7 +22,7 @@ const (
 	EXECUTOR_ID = "kilo-free"
 	PLUGIN_NAME = "KiloCode Free"
 
-	HTTP_TIMEOUT = 30 * time.Second
+	HTTP_TIMEOUT = 180 * time.Second
 )
 
 // kiloCatalogModel is the live metadata returned by KiloCode's /models API.
@@ -60,6 +61,7 @@ var (
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
 var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
+var kiloHealthChecksEnabled atomic.Bool
 var kiloProber = shared.NewModelProbeScheduler(15*time.Minute, modelHealth, kiloProbeTargets, probeKiloModel)
 
 func init() {
@@ -69,8 +71,10 @@ func init() {
 
 func kiloHeaders() map[string]string {
 	return map[string]string{
-		"Content-Type": "application/json",
-		"Accept":       "application/json",
+		"Content-Type":          "application/json",
+		"Accept":                "application/json",
+		"User-Agent":            "opencode-kilo-provider",
+		"X-KILOCODE-EDITORNAME": "Kilo CLI",
 	}
 }
 
@@ -83,6 +87,7 @@ type config struct {
 	ModelsURL    string            `json:"kilo_models_url"`
 	Prefix       string            `json:"prefix"`
 	ModelAliases map[string]string `json:"model_aliases"`
+	HealthCheck  bool              `json:"health_check"`
 }
 
 func (c config) prefix() string {
@@ -106,6 +111,7 @@ func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
+	setKiloHealthChecksEnabled(cfg.HealthCheck)
 
 	chatURL, modelsURL := cfg.endpoints()
 	endpointMu.Lock()
@@ -154,6 +160,49 @@ func currentKiloModelsURL() string {
 }
 func kiloHealthScope() string {
 	return PROVIDER_ID + "|" + currentKiloChatURL() + "|" + currentKiloModelsURL()
+}
+
+func setKiloHealthChecksEnabled(enabled bool) {
+	if kiloHealthChecksEnabled.Swap(enabled) != enabled {
+		modelHealth.Reset()
+	}
+}
+
+func kiloHealthChecksOn() bool {
+	return kiloHealthChecksEnabled.Load()
+}
+
+func kiloModelHidden(scope, model string) bool {
+	return kiloHealthChecksOn() && modelHealth.Hidden(scope, model)
+}
+
+func kiloModelAllowed(scope, model string) bool {
+	return !kiloHealthChecksOn() || modelHealth.Allow(scope, model)
+}
+
+func kiloRecordProbeFailure(scope, model string) {
+	if kiloHealthChecksOn() {
+		modelHealth.RecordProbeFailure(scope, model)
+	}
+}
+
+func kiloRecordFailure(scope, model string) {
+	if kiloHealthChecksOn() {
+		modelHealth.RecordFailure(scope, model)
+	}
+}
+
+func kiloRecordSuccess(scope, model string) {
+	if kiloHealthChecksOn() {
+		modelHealth.RecordSuccess(scope, model)
+	}
+}
+
+func kiloVisibleModels(scope string, models []string) []string {
+	if !kiloHealthChecksOn() {
+		return models
+	}
+	return modelHealth.Filter(scope, models)
 }
 
 // fetchKiloCatalog retrieves the current free model list and metadata from KiloCode.
@@ -252,6 +301,9 @@ func healthCheckKilo() bool {
 }
 
 func kiloProbeTargets() []shared.ModelProbeTarget {
+	if !kiloHealthChecksOn() {
+		return nil
+	}
 	scope := kiloHealthScope()
 	ids := kiloRefresher.Models()
 	targets := make([]shared.ModelProbeTarget, 0, len(ids))
@@ -267,7 +319,7 @@ func kiloProbeTargets() []shared.ModelProbeTarget {
 }
 
 func probeKiloModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome {
-	if target.Scope != kiloHealthScope() {
+	if !kiloHealthChecksOn() || target.Scope != kiloHealthScope() {
 		return shared.ProbeIgnored
 	}
 	payload, err := json.Marshal(map[string]any{

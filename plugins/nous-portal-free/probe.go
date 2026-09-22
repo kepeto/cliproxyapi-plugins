@@ -96,6 +96,9 @@ func refreshNousStoreIfNeeded(store storageJSON) (storageJSON, bool) {
 }
 
 func nousProbeTargets() []shared.ModelProbeTarget {
+	if !nousHealthChecksOn() {
+		return nil
+	}
 	nousProbeStores.RLock()
 	stores := make(map[string]storageJSON, len(nousProbeStores.byScope))
 	for scope, store := range nousProbeStores.byScope {
@@ -126,6 +129,9 @@ func nousProbeTargets() []shared.ModelProbeTarget {
 }
 
 func probeNousModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome {
+	if !nousHealthChecksOn() {
+		return shared.ProbeIgnored
+	}
 	nousProbeStores.RLock()
 	store, ok := nousProbeStores.byScope[target.Scope]
 	nousProbeStores.RUnlock()

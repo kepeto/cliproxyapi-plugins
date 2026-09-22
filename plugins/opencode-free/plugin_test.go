@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -242,6 +243,8 @@ func TestExecutorStreamForcesSSE(t *testing.T) {
 }
 
 func TestExecutorStreamRejectsIncompleteStream(t *testing.T) {
+	setOpencodeHealthChecksEnabled(true)
+	defer setOpencodeHealthChecksEnabled(false)
 	originalRefresher := opencodeRefresher
 	originalChatURL := currentOpenCodeChatURL()
 	defer func() {
@@ -288,6 +291,8 @@ func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
 }
 
 func TestModelStaticHidesAndRestoresProbeFailure(t *testing.T) {
+	setOpencodeHealthChecksEnabled(true)
+	defer setOpencodeHealthChecksEnabled(false)
 	originalRefresher := opencodeRefresher
 	defer func() { opencodeRefresher = originalRefresher }()
 	model := "probe-failure-free"
@@ -322,6 +327,8 @@ func TestModelStaticHidesAndRestoresProbeFailure(t *testing.T) {
 }
 
 func TestSmokeFailureHidesAndProbeRestoresModel(t *testing.T) {
+	setOpencodeHealthChecksEnabled(true)
+	defer setOpencodeHealthChecksEnabled(false)
 	originalRefresher := opencodeRefresher
 	originalChatURL := currentOpenCodeChatURL()
 	defer func() {
@@ -418,7 +425,7 @@ func TestFetchOpenCodeModelsFiltersByMetadata(t *testing.T) {
 		if r.URL.Path == "/metadata" {
 			_, _ = w.Write([]byte(`{"opencode":{"id":"opencode","npm":"@ai-sdk/openai-compatible","models":{
   "chat-free":{"cost":{"input":0,"output":0}},
-  "responses-free":{"cost":{"input":0,"output":0},"provider":{"npm":"@ai-sdk/openai"}},
+  "responses-free":{"cost":{"input":0,"output":0},"provider":{"npm":"@ai-sdk/anthropic"}},
   "paid-free":{"cost":{"input":1,"output":2}},
   "retired-free":{"cost":{"input":0,"output":0},"status":"deprecated"}
 }}}`))
@@ -486,5 +493,129 @@ func TestModelEntryUsesMetadataCapabilities(t *testing.T) {
 	unknown := modelEntry("unknown-free", "unknown-free")
 	if _, ok := unknown["ContextLength"]; ok {
 		t.Fatalf("unknown model reported a context length: %v", unknown)
+	}
+}
+func TestExecutorFramingAndHeaders(t *testing.T) {
+	originalRefresher := opencodeRefresher
+	originalChatURL := currentOpenCodeChatURL()
+	defer func() {
+		opencodeRefresher = originalRefresher
+		endpointMu.Lock()
+		opencodeChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+
+	var capturedReq map[string]any
+	var userAgent, clientHdr, sessionHdr, requestHdr string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent = r.Header.Get("User-Agent")
+		clientHdr = r.Header.Get("x-opencode-client")
+		sessionHdr = r.Header.Get("x-opencode-session")
+		requestHdr = r.Header.Get("x-opencode-request")
+
+		_ = json.NewDecoder(r.Body).Decode(&capturedReq)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"framing-model-free"}, nil
+	}, nil)
+	endpointMu.Lock()
+	opencodeChatURL = server.URL
+	endpointMu.Unlock()
+
+	resp, err := handleExecutorExecute([]byte(`{"Model":"framing-model-free","Messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("handleExecutorExecute failed: %v", err)
+	}
+	if !strings.Contains(string(resp), `"Payload":"`) {
+		t.Fatalf("unexpected response: %s", resp)
+	}
+
+	if userAgent != "opencode/1.18.32" {
+		t.Errorf("expected User-Agent opencode/1.18.32, got %q", userAgent)
+	}
+	if clientHdr != "cli" {
+		t.Errorf("expected x-opencode-client cli, got %q", clientHdr)
+	}
+	if !strings.HasPrefix(sessionHdr, "ses_") {
+		t.Errorf("expected x-opencode-session to start with ses_, got %q", sessionHdr)
+	}
+	if !strings.HasPrefix(requestHdr, "msg_") {
+		t.Errorf("expected x-opencode-request to start with msg_, got %q", requestHdr)
+	}
+
+	if stream, ok := capturedReq["stream"].(bool); !ok || !stream {
+		t.Errorf("expected stream: true in captured request")
+	}
+	tools, ok := capturedReq["tools"].([]any)
+	if !ok || len(tools) < 2 {
+		t.Fatalf("expected injected minimal tools, got: %v", capturedReq["tools"])
+	}
+	if tc, ok := capturedReq["tool_choice"].(string); !ok || tc != "none" {
+		t.Errorf("expected tool_choice: 'none', got %v", capturedReq["tool_choice"])
+	}
+}
+
+func TestExecutorResponsesModelRouting(t *testing.T) {
+	originalChatURL := currentOpenCodeChatURL()
+	defer func() {
+		endpointMu.Lock()
+		opencodeChatURL = originalChatURL
+		endpointMu.Unlock()
+	}()
+
+	var calledResponses bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			calledResponses = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_123\",\"created_at\":1700000000,\"model\":\"muse-spark-1.3-contributor-free\"}}\n\n")
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n")
+			_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"created_at\":1700000000,\"model\":\"muse-spark-1.3-contributor-free\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"total_tokens\":12}}}\n\n")
+			return
+		}
+		http.Error(w, "unexpected path", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	opencodeRefresher = shared.NewModelRefresher(time.Hour, func() ([]string, error) {
+		return []string{"muse-spark-1.3-contributor-free"}, nil
+	}, nil)
+	endpointMu.Lock()
+	opencodeChatURL = server.URL + "/v1/chat/completions"
+	endpointMu.Unlock()
+
+	resp, err := handleExecutorExecute([]byte(`{"Model":"muse-spark-1.3-contributor-free","Messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatalf("handleExecutorExecute failed: %v", err)
+	}
+	t.Logf("resp: %s", string(resp))
+	if !calledResponses {
+		t.Errorf("expected request to route to /responses endpoint")
+	}
+	var hostResp struct {
+		Result struct {
+			Payload string `json:"Payload"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resp, &hostResp); err != nil {
+		t.Fatalf("failed to unmarshal host envelope: %v", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(hostResp.Result.Payload)
+	if err != nil {
+		t.Fatalf("failed to decode payload: %v", err)
+	}
+	var chatResp map[string]any
+	if err := json.Unmarshal(decoded, &chatResp); err != nil {
+		t.Fatalf("failed to unmarshal chat response (%q): %v", string(decoded), err)
+	}
+	choices := chatResp["choices"].([]any)
+	msg := choices[0].(map[string]any)["message"].(map[string]any)
+	if msg["content"] != "OK" {
+		t.Errorf("expected content 'OK', got %v", msg["content"])
 	}
 }

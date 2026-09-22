@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
@@ -20,7 +22,7 @@ const (
 	EXECUTOR_ID = "opencode-free"
 	PLUGIN_NAME = "OpenCode Free"
 
-	HTTP_TIMEOUT = 30 * time.Second
+	HTTP_TIMEOUT = 180 * time.Second
 )
 
 var openCodeMetadataURL = "https://models.opencode.ai/api.json"
@@ -135,21 +137,18 @@ func fetchOpenCodeMetadata() (map[string]openCodeModelMetadata, error) {
 	return result, nil
 }
 
-// OpenCode headers (from pi-bansos)
+// opencodeHeaders returns the headers needed for OpenCode Zen requests.
 func opencodeHeaders() map[string]string {
 	return map[string]string{
-		"User-Agent":         "opencode/latest/1.14.50/cli",
+		"User-Agent":         "opencode/1.18.32",
 		"x-opencode-client":  "cli",
-		"x-opencode-project": "default",
-		"x-opencode-session": `{"session":"` + randomSessionID() + `"}`,
-		"x-opencode-request": randomRequestID(),
+		"x-opencode-project": newOpenCodeProjectID(),
+		"x-opencode-session": newOpenCodeSessionID(),
+		"x-opencode-request": newOpenCodeRequestID(),
 		"Accept":             "application/json",
 		"Content-Type":       "application/json",
 	}
 }
-
-func randomSessionID() string { return "cli-" + shared.RandomHex(16) }
-func randomRequestID() string { return shared.RandomHex(32) }
 
 var httpClient = &http.Client{Timeout: HTTP_TIMEOUT}
 
@@ -169,6 +168,7 @@ var (
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).
 var modelAliases = shared.NewAliasTable()
 var modelHealth = shared.NewModelHealth(3, 15*time.Minute)
+var opencodeHealthChecksEnabled atomic.Bool
 var opencodeProber = shared.NewModelProbeScheduler(15*time.Minute, modelHealth, opencodeProbeTargets, probeOpenCodeModel)
 
 func init() {
@@ -228,7 +228,7 @@ func fetchOpenCodeModels() ([]string, error) {
 		if model.Cost.Input != 0 || model.Cost.Output != 0 {
 			continue
 		}
-		if model.Provider.NPM != "@ai-sdk/openai-compatible" {
+		if model.Provider.NPM != "@ai-sdk/openai-compatible" && model.Provider.NPM != "@ai-sdk/openai" {
 			continue
 		}
 		if model.Status == "deprecated" {
@@ -268,6 +268,9 @@ func healthCheckOpenCode() bool {
 }
 
 func opencodeProbeTargets() []shared.ModelProbeTarget {
+	if !opencodeHealthChecksOn() {
+		return nil
+	}
 	scope := openCodeHealthScope()
 	ids := opencodeRefresher.Models()
 	targets := make([]shared.ModelProbeTarget, 0, len(ids))
@@ -283,7 +286,7 @@ func opencodeProbeTargets() []shared.ModelProbeTarget {
 }
 
 func probeOpenCodeModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome {
-	if target.Scope != openCodeHealthScope() {
+	if !opencodeHealthChecksOn() || target.Scope != openCodeHealthScope() {
 		return shared.ProbeIgnored
 	}
 	payload, err := json.Marshal(map[string]any{
@@ -295,7 +298,7 @@ func probeOpenCodeModel(target shared.ModelProbeTarget) shared.ModelProbeOutcome
 	if err != nil {
 		return shared.ProbeFailed
 	}
-	status, body, err := executeOpenCodeChat(payload, false)
+	status, body, err := executeOpenCodeChat(payload, target.Model, false)
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return shared.ProbeIgnored
 	}
@@ -312,6 +315,7 @@ type config struct {
 	ModelsURL    string            `json:"opencode_models_url"`
 	ModelAliases map[string]string `json:"model_aliases"`
 	Prefix       string            `json:"prefix"`
+	HealthCheck  bool              `json:"health_check"`
 }
 
 func (c config) prefix() string {
@@ -335,6 +339,7 @@ func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
+	setOpencodeHealthChecksEnabled(cfg.HealthCheck)
 
 	chatURL, modelsURL := cfg.endpoints()
 	endpointMu.Lock()
@@ -375,6 +380,10 @@ func currentOpenCodeChatURL() string {
 	defer endpointMu.RUnlock()
 	return opencodeChatURL
 }
+func currentOpenCodeResponsesURL() string {
+	chatURL := currentOpenCodeChatURL()
+	return strings.TrimSuffix(chatURL, "/chat/completions") + "/responses"
+}
 
 func currentOpenCodeModelsURL() string {
 	endpointMu.RLock()
@@ -384,6 +393,49 @@ func currentOpenCodeModelsURL() string {
 
 func openCodeHealthScope() string {
 	return PROVIDER_ID + "|" + currentOpenCodeChatURL() + "|" + currentOpenCodeModelsURL()
+}
+
+func opencodeVisibleModels(scope string, models []string) []string {
+	if !opencodeHealthChecksOn() {
+		return models
+	}
+	return modelHealth.Filter(scope, models)
+}
+
+func setOpencodeHealthChecksEnabled(enabled bool) {
+	if opencodeHealthChecksEnabled.Swap(enabled) != enabled {
+		modelHealth.Reset()
+	}
+}
+
+func opencodeHealthChecksOn() bool {
+	return opencodeHealthChecksEnabled.Load()
+}
+
+func opencodeModelHidden(scope, model string) bool {
+	return opencodeHealthChecksOn() && modelHealth.Hidden(scope, model)
+}
+
+func opencodeModelAllowed(scope, model string) bool {
+	return !opencodeHealthChecksOn() || modelHealth.Allow(scope, model)
+}
+
+func opencodeRecordProbeFailure(scope, model string) {
+	if opencodeHealthChecksOn() {
+		modelHealth.RecordProbeFailure(scope, model)
+	}
+}
+
+func opencodeRecordFailure(scope, model string) {
+	if opencodeHealthChecksOn() {
+		modelHealth.RecordFailure(scope, model)
+	}
+}
+
+func opencodeRecordSuccess(scope, model string) {
+	if opencodeHealthChecksOn() {
+		modelHealth.RecordSuccess(scope, model)
+	}
 }
 
 func httpDo(req *http.Request) (int, []byte, error) {

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kepeto/cliproxyapi-plugins/shared"
@@ -114,6 +115,7 @@ type config struct {
 	Scope            string            `json:"scope"`
 	Prefix           string            `json:"prefix"`
 	ModelAliases     map[string]string `json:"model_aliases"`
+	HealthCheck      bool              `json:"health_check"`
 }
 
 func (c config) portalBaseURL() string {
@@ -160,13 +162,15 @@ func applyHostAliases(raw []byte) {
 	}
 }
 
-// applyConfig applies the host-forwarded config subtree (endpoint, prefix, aliases).
+// applyConfig applies the host-forwarded config subtree (endpoints, prefix,
+// aliases, and optional model health checks).
 func applyConfig(raw []byte) {
 	cfg := resolveConfig(shared.ConfigBytesFromLifecycle(raw))
 	setNousInferenceURL(cfg.inferenceBaseURL())
 	setNousPortalURL(cfg.portalBaseURL())
 	setPluginPrefix(cfg.prefix())
 	modelAliases.SetConfig(cfg.ModelAliases)
+	setNousHealthChecksEnabled(cfg.HealthCheck)
 }
 
 func resolveConfig(raw []byte) config {
@@ -246,6 +250,46 @@ func fetchNousModels() ([]string, error) {
 // healthCheckNous checks if the Nous Portal recommended-models endpoint is alive.
 func healthCheckNous() bool {
 	return len(fetchPortalFreeModels(currentNousPortalURL())) > 0
+}
+
+var nousHealthChecksEnabled atomic.Bool
+
+func setNousHealthChecksEnabled(enabled bool) {
+	if nousHealthChecksEnabled.Swap(enabled) != enabled {
+		modelHealth.Reset()
+	}
+}
+
+func nousHealthChecksOn() bool {
+	return nousHealthChecksEnabled.Load()
+}
+
+// model health helpers are no-ops while health_check is disabled. This keeps
+// the dashboard model list authoritative by default and avoids hiding models.
+func nousModelHidden(scope, model string) bool {
+	return nousHealthChecksOn() && modelHealth.Hidden(scope, model)
+}
+
+func nousModelAllowed(scope, model string) bool {
+	return !nousHealthChecksOn() || modelHealth.Allow(scope, model)
+}
+
+func nousRecordProbeFailure(scope, model string) {
+	if nousHealthChecksOn() {
+		modelHealth.RecordProbeFailure(scope, model)
+	}
+}
+
+func nousRecordFailure(scope, model string) {
+	if nousHealthChecksOn() {
+		modelHealth.RecordFailure(scope, model)
+	}
+}
+
+func nousRecordSuccess(scope, model string) {
+	if nousHealthChecksOn() {
+		modelHealth.RecordSuccess(scope, model)
+	}
 }
 
 // modelAliases maps client-visible alias IDs to upstream IDs (plugin config).

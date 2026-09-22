@@ -96,11 +96,11 @@ exist in the current live catalog. They use the active prefix, for example
 
 ## Runtime Guarantees
 
-Health probes run every 15 minutes for models in the live catalog. A failed
-probe or limit/server/timeout/invalid response hides that model immediately; a
-successful later probe restores it. Normal model-specific 4xx failures use the
-three-failure threshold. SSE is buffered with 100,000-chunk, 100 MiB total, and
-1 MiB line limit.
+Model health checking is disabled by default. Set `health_check: true` to run
+probes every 15 minutes and hide a model after failed probes or inference
+failures. A later successful probe restores it. When disabled, health state never
+removes models from the dashboard list. SSE is buffered with 100,000 chunks, 100 MiB
+total, and 1 MiB line limits.
 
 A buffered stream is only forwarded when it contains both a JSON event carrying
 `choices` and a `[DONE]` terminator. A stream that ends early is rejected with

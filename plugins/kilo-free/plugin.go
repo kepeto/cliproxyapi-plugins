@@ -169,6 +169,7 @@ func registerPayload() string {
       {"Name": "kilo_models_url", "Type": "string", "Description": "KiloCode models URL (default https://api.kilo.ai/api/gateway/models)"},
       {"Name": "kilo_base_url", "Type": "string", "Description": "Legacy base URL; derives /v1/chat/completions and /models when explicit URLs are not set"},
       {"Name": "model_aliases", "Type": "object", "Description": "Client-visible model alias to upstream model ID map"},
+      {"Name": "health_check", "Type": "bool", "Description": "Enable model health probes and hide models after failed checks (default false)"},
       {"Name": "prefix", "Type": "string", "Description": "Model ID prefix (default kilo-free)"}
     ]
   },

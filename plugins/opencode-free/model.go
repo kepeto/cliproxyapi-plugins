@@ -23,11 +23,11 @@ func handleModelStatic(rawReq []byte) ([]byte, error) {
 		return errorEnvelope("model_refresh_failed", err.Error()), nil
 	}
 	models := make([]map[string]interface{}, 0)
-	for _, id := range modelHealth.Filter(openCodeHealthScope(), opencodeRefresher.Models()) {
+	for _, id := range opencodeVisibleModels(openCodeHealthScope(), opencodeRefresher.Models()) {
 		models = append(models, modelEntry(id, id))
 	}
 	for alias, target := range modelAliases.Entries() {
-		if !modelHealth.Hidden(openCodeHealthScope(), target) {
+		if !opencodeModelHidden(openCodeHealthScope(), target) {
 			models = append(models, modelEntry(alias, target))
 		}
 	}
@@ -120,12 +120,12 @@ func handleModelForAuth(rawReq []byte) ([]byte, error) {
 
 	models := make([]map[string]interface{}, 0)
 	catalogEntries := make([]map[string]interface{}, 0)
-	for _, id := range modelHealth.Filter(openCodeHealthScope(), opencodeRefresher.Models()) {
+	for _, id := range opencodeVisibleModels(openCodeHealthScope(), opencodeRefresher.Models()) {
 		models = append(models, modelEntry(id, id))
 		catalogEntries = append(catalogEntries, catalogEntry(id, id))
 	}
 	for alias, target := range modelAliases.Entries() {
-		if !modelHealth.Hidden(openCodeHealthScope(), target) {
+		if !opencodeModelHidden(openCodeHealthScope(), target) {
 			models = append(models, modelEntry(alias, target))
 		}
 	}

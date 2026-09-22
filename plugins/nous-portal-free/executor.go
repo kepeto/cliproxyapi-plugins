@@ -19,11 +19,11 @@ func recordInferenceFailure(scope, model string, status int, body []byte, err er
 		return
 	}
 	if err != nil || status == 408 || status == 429 || status >= 500 {
-		modelHealth.RecordProbeFailure(scope, model)
+		nousRecordProbeFailure(scope, model)
 		return
 	}
 	if shared.IsModelSpecificFailure(status, body, nil) {
-		modelHealth.RecordFailure(scope, model)
+		nousRecordFailure(scope, model)
 	}
 }
 
@@ -50,7 +50,7 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		return errorEnvelope("model_not_found", "model is not in the free catalog"), nil
 	}
 	scope := nousHealthScope(store)
-	if !modelHealth.Allow(scope, modelID) {
+	if !nousModelAllowed(scope, modelID) {
 		return errorEnvelope("model_quarantined", "model is temporarily unavailable"), nil
 	}
 
@@ -68,10 +68,10 @@ func handleExecutorExecute(raw []byte) ([]byte, error) {
 		return errorEnvelopeWithStatus("upstream_error", "inference returned "+strconv.Itoa(status)+": "+string(body), status), nil
 	}
 	if !shared.ValidChatResponse(body) {
-		modelHealth.RecordProbeFailure(scope, modelID)
+		nousRecordProbeFailure(scope, modelID)
 		return errorEnvelope("executor_execute_failed", "invalid or empty chat response"), nil
 	}
-	modelHealth.RecordSuccess(scope, modelID)
+	nousRecordSuccess(scope, modelID)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Payload": base64encode(body),
 		"Headers": shared.HeaderMap(headers),
@@ -101,7 +101,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		return errorEnvelope("model_not_found", "model is not in the free catalog"), nil
 	}
 	scope := nousHealthScope(store)
-	if !modelHealth.Allow(scope, modelID) {
+	if !nousModelAllowed(scope, modelID) {
 		return errorEnvelope("model_quarantined", "model is temporarily unavailable"), nil
 	}
 
@@ -132,7 +132,7 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 	for scanner.Scan() {
 		if len(chunks) >= maxStreamChunks {
 			_ = reader.Close()
-			modelHealth.RecordProbeFailure(scope, modelID)
+			nousRecordProbeFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max chunk limit"), nil
 		}
 		line := scanner.Text()
@@ -143,22 +143,22 @@ func handleExecutorExecuteStream(raw []byte) ([]byte, error) {
 		totalBytes += len(line) + 1
 		if totalBytes > maxStreamBytes {
 			_ = reader.Close()
-			modelHealth.RecordProbeFailure(scope, modelID)
+			nousRecordProbeFailure(scope, modelID)
 			return errorEnvelope("executor_stream_failed", "stream exceeded max byte limit"), nil
 		}
 		chunks = append(chunks, map[string]any{"Payload": []byte(line + "\n")})
 	}
 	if err := scanner.Err(); err != nil {
 		_ = reader.Close()
-		modelHealth.RecordProbeFailure(scope, modelID)
+		nousRecordProbeFailure(scope, modelID)
 		return errorEnvelope("executor_stream_failed", "stream read error: "+err.Error()), nil
 	}
 	_ = reader.Close()
 	if len(chunks) == 0 {
-		modelHealth.RecordProbeFailure(scope, modelID)
+		nousRecordProbeFailure(scope, modelID)
 		return errorEnvelope("executor_stream_failed", "empty chat stream"), nil
 	}
-	modelHealth.RecordSuccess(scope, modelID)
+	nousRecordSuccess(scope, modelID)
 	return okEnvelopeJSON(mustJSON(map[string]any{
 		"Headers": shared.HeaderMap(headers),
 		"Chunks":  chunks,

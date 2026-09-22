@@ -756,6 +756,8 @@ func TestRegisterPayloadAdvertisesModelAliases(t *testing.T) {
 }
 
 func TestNousProbeHidesAndRestoresModel(t *testing.T) {
+	setNousHealthChecksEnabled(true)
+	defer setNousHealthChecksEnabled(false)
 	status := http.StatusTooManyRequests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if status != http.StatusOK {

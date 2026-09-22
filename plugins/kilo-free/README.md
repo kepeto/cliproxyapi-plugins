@@ -83,11 +83,14 @@ Alias changes apply after `plugin.reconfigure` without restart.
 
 ## Runtime Guarantees
 
-Health probes run every 15 minutes for models in the live catalog. A failed
-probe or limit/server/timeout/invalid response hides that model immediately; a
-successful later probe restores it. Normal model-specific 4xx failures use the
-three-failure threshold. SSE is buffered with 100,000-chunk, 100 MiB total, and
-1 MiB line limits.
+Model health checking is disabled by default. Set `health_check: true` to run
+probes every 15 minutes and hide a model after failed probes or inference
+failures. A later successful probe restores it. When disabled, health state never
+removes models from the dashboard list. Chat/catalog requests use a 180-second
+timeout; transient 502/503 responses are retried up to three times with
+exponential backoff. SSE is buffered with 100,000 chunks, 100 MiB total, and
+1 MiB line limits. Requests include Kilo-compatible `User-Agent` and editor
+headers while preserving anonymous access for free models.
 
 ## Files
 
